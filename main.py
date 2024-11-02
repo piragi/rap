@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 import torch
 
@@ -7,6 +8,8 @@ from model import KVCache, transformer
 from tokenizer import Tokenizer
 from weights import load_weights
 
+MAX_SEQ_LEN = 8192
+
 if torch.cuda.is_available():
     device = torch.device("cuda")
 else:
@@ -14,6 +17,7 @@ else:
 
 print(f"Using device: {device}")
 
+# from entropix repo
 def apply_scaling(freqs: torch.Tensor) -> torch.Tensor:
     SCALE_FACTOR = 8.0
     LOW_FREQ_FACTOR = 1.0
@@ -49,6 +53,7 @@ def apply_scaling(freqs: torch.Tensor) -> torch.Tensor:
 
     return scaled_freqs
 
+# from entropix repo
 def precompute_freqs_cis(
     dim: int,
     end: int,
@@ -65,7 +70,7 @@ def precompute_freqs_cis(
     freqs = t * freqs  # Broadcasting to shape: (end, dim//2)
     return torch.exp(1j * freqs)
 
-def build_attn_mask(seqlen: int, start_pos: int) -> torch.Tensor:
+def build_attn_mask(seqlen: int, start_pos: int) -> Optional[torch.Tensor]:
     mask = None
     if seqlen > 1:
         mask = torch.full((seqlen, seqlen), float("-inf"))
@@ -111,12 +116,19 @@ Tell me a long and wonderful story aboout the adventures of the elven mage frier
 
 raw_tokens1 = tokenizer.encode(prompt4, bos=False, eos=False, allowed_special="all")
 
-def generate(transformer_weights, model_params: ModelParams, tokens):
+# from entropix repo
+def generate(
+    transformer_weights,
+    model_params: ModelParams,
+    tokens: torch.Tensor,
+    temperature: float = 0.8,
+    top_p: float = 0.9,
+):
     gen_tokens = None
-    cur_pos = 0
+    curr_pos = 0
     tokens = torch.tensor([tokens], dtype=torch.long).to(device)
     bsz, seqlen = tokens.shape
-    attn_mask = build_attn_mask(seqlen, cur_pos)
+    attn_mask = build_attn_mask(seqlen, curr_pos)
     freqs_cis = precompute_freqs_cis(
         model_params.head_dim,
         model_params.max_seq_len,
@@ -138,7 +150,7 @@ def generate(transformer_weights, model_params: ModelParams, tokens):
         transformer_weights,
         model_params,
         tokens,
-        cur_pos,
+        curr_pos,
         kvcache,
         freqs_cis[:seqlen],
         attention_mask=attn_mask,
@@ -146,22 +158,24 @@ def generate(transformer_weights, model_params: ModelParams, tokens):
     next_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
     gen_tokens = next_token
     print(tokenizer.decode([next_token.item()]), end="", flush=True)
-    cur_pos = seqlen
-    stop = torch.tensor([128001, 128008, 128009], device=device, dtype=torch.int32)
-    while cur_pos < 8192:
-        cur_pos += 1
-        logits, kvcache, scores = transformer(
+    curr_pos = seqlen
+    stop = torch.Tensor(tokenizer.stop_tokens).to(device)
+    while curr_pos < MAX_SEQ_LEN:
+        curr_pos += 1
+        logits, kvcache, _ = transformer(
             transformer_weights,
             model_params,
             next_token,
-            cur_pos,
+            curr_pos,
             kvcache,
-            freqs_cis[cur_pos:cur_pos + 1],
+            freqs_cis[curr_pos:curr_pos + 1],
         )
-        probs = torch.softmax(logits[:, -1] / 0.666, dim=-1)
-        next_token = sample_top_p(probs, 0.9)
+
+        probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
+        next_token = sample_top_p(probs, top_p)
         gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
         print(tokenizer.decode(next_token.tolist()[0]), end="", flush=True)
+
         if torch.isin(next_token, stop).any():
             break
 

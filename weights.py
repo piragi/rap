@@ -1,4 +1,3 @@
-import os
 from typing import List, NamedTuple
 
 import torch
@@ -7,7 +6,6 @@ if torch.cuda.is_available():
     device = torch.device("cuda")
 else:
     device = torch.device("cpu")
-
 
 class LayerWeights(NamedTuple):
     wq: torch.Tensor
@@ -20,13 +18,11 @@ class LayerWeights(NamedTuple):
     ffn_norm: torch.Tensor
     attention_norm: torch.Tensor
 
-
 class TransformerWeights(NamedTuple):
     tok_embeddings: torch.Tensor
     norm: torch.Tensor
     output: torch.Tensor
     layer_weights: List[LayerWeights]
-
 
 def load_weights(checkpoint_path: str) -> TransformerWeights:
     state_dict = torch.load(checkpoint_path, map_location="cpu")

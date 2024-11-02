@@ -77,20 +77,18 @@ class KVCache(nn.Module):
 def rms_norm(x: torch.Tensor, w: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     return w * (x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps))
 
-def rotary_embedding(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    freqs_cis: torch.Tensor,
-    dtype: torch.dtype = torch.float32,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    reshape_xq = xq.float().reshape(*xq.shape[:-1], -1, 2)
-    reshape_xk = xk.float().reshape(*xk.shape[:-1], -1, 2)
-    xq_ = torch.complex(reshape_xq[..., 0], reshape_xq[..., 1])
-    xk_ = torch.complex(reshape_xk[..., 0], reshape_xk[..., 1])
-    xq_out = xq_ * freqs_cis.unsqueeze(0).unsqueeze(2)
-    xk_out = xk_ * freqs_cis.unsqueeze(0).unsqueeze(2)
-    xq_out = torch.stack((xq_out.real, xq_out.imag), dim=-1).reshape(*xq_out.shape[:-1], -1)
-    xk_out = torch.stack((xk_out.real, xk_out.imag), dim=-1).reshape(*xk_out.shape[:-1], -1)
+def apply_rotary_emb(xq: torch.Tensor,
+                     xk: torch.Tensor,
+                     freq_cis: torch.Tensor,
+                     dtype: torch.dtype = torch.float32) -> Tuple[torch.Tensor, torch.Tensor]:
+    # reshape into real, img and view as complex
+    xq_ = xq.float().reshape(*xq.shape[:-1], -1, 2)
+    xk_ = xk.float().reshape(*xk.shape[:-1], -1, 2)
+    xq_ = torch.view_as_complex(xq_)
+    xk_ = torch.view_as_complex(xk_)
+    # combine with freq matrix and flatten
+    xq_out = torch.view_as_real(xq_ * freq_cis.unsqueeze(0).unsqueeze(2)).flatten(3)
+    xk_out = torch.view_as_real(xk_ * freq_cis.unsqueeze(0).unsqueeze(2)).flatten(3)
     return xq_out.to(dtype), xk_out.to(dtype)
 
 def feed_forward(x: torch.Tensor, weights: LayerWeights) -> torch.Tensor:
@@ -114,7 +112,7 @@ def attention(
     xq = F.linear(x, weights.wq).view(bsz, -1, model_params.n_local_heads, model_params.head_dim)
     xk = F.linear(x, weights.wk).view(bsz, -1, model_params.n_local_kv_heads, model_params.head_dim)
     xv = F.linear(x, weights.wv).view(bsz, -1, model_params.n_local_kv_heads, model_params.head_dim)
-    xq, xk = rotary_embedding(xq, xk, freq_cis, dtype=torch.bfloat16)
+    xq, xk = apply_rotary_emb(xq, xk, freq_cis, dtype=torch.bfloat16)
     keys, values, kv_cache = kv_cache.update(xk, xv, layer_idx, curr_pos, n_rep)
     xq = torch.permute(xq, (0, 2, 1, 3))  # (bsz, n_heads, seq_len, head_dim)
     keys = torch.permute(keys, (0, 2, 3, 1))  # (bsz, n_heads, head_dim, cache_len)
@@ -140,6 +138,7 @@ def transformer(
     attention_mask: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, KVCache, torch.Tensor]:
     h = weights.tok_embeddings[tokens]
+    scores = torch.empty(0)
 
     for layer in range(model_params.n_layers):
         norm_x = rms_norm(h, weights.layer_weights[layer].attention_norm)
