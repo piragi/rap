@@ -6,7 +6,7 @@ import torch
 from config import ModelParams, load_model_params
 from model import KVCache, transformer
 from tokenizer import Tokenizer
-from weights import load_weights
+from weights import TransformerWeights, load_weights
 
 MAX_SEQ_LEN = 8192
 
@@ -103,6 +103,58 @@ def sample_top_p(probs, p):
     next_token = torch.gather(probs_idx, -1, next_token)
     return next_token
 
+def get_action_loglikelihood(prefix: str, actions: list[str], tokenizer: Tokenizer, transformer_weights: TransformerWeights,
+                             model_params: ModelParams):
+
+    curr_pos = 0
+
+    bsz = len(actions)
+    assert bsz <= model_params.max_batch_size, (bsz, model_params.max_batch_size)
+    prefix_tokens = tokenizer.encode(prefix, bos=True, eos=False, allowed_special="all")
+    prompts_tokens = [tokenizer.encode(x, bos=False, eos=False, allowed_special="all") for x in actions]
+    max_seq_len = max(len(prefix_tokens) + len(t) for t in prompts_tokens)
+    tokens = torch.full((bsz, max_seq_len), tokenizer.pad_id).cuda().long()
+    for i in range(bsz):
+        tokens[i, :len(prefix_tokens)] = torch.tensor(prefix_tokens)
+        current_prompt = prompts_tokens[i]
+        tokens[i, len(prefix_tokens):len(prefix_tokens) + len(current_prompt)] = torch.tensor(current_prompt)
+
+    attn_mask = build_attn_mask(max_seq_len, curr_pos)
+    freqs_cis = precompute_freqs_cis(
+        model_params.head_dim,
+        model_params.max_seq_len,
+        model_params.rope_theta,
+        model_params.use_scaled_rope,
+    )
+    kvcache = KVCache(
+        model_params.n_layers,
+        bsz,
+        model_params.max_seq_len,
+        model_params.n_local_kv_heads,
+        model_params.head_dim,
+    ).to(device)
+    (
+        logits,
+        kvcache,
+        _,
+    ) = transformer(
+        transformer_weights,
+        model_params,
+        tokens,
+        curr_pos,
+        kvcache,
+        freqs_cis[:max_seq_len],
+        attention_mask=attn_mask,
+    )
+
+    acc_probs = torch.zeros(bsz, dtype=torch.float32).to(device)
+    for i in range(len(prefix_tokens), max_seq_len):
+        probs = torch.softmax(logits[:, i - 1, :], dim=-1)
+        for j in range(bsz):
+            if tokens[j, i] != tokenizer.pad_id:
+                acc_probs[j] += torch.log(probs[j, tokens[j, i]])
+    return acc_probs
+
 home_dir = os.path.expanduser("~")
 model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B-Instruct")
 model_params = load_model_params(os.path.join(model_path, "params.json"))
@@ -118,7 +170,7 @@ raw_tokens1 = tokenizer.encode(prompt4, bos=False, eos=False, allowed_special="a
 
 # from entropix repo
 def generate(
-    transformer_weights,
+    transformer_weights: TransformerWeights,
     model_params: ModelParams,
     tokens: torch.Tensor,
     temperature: float = 0.8,
@@ -179,5 +231,9 @@ def generate(
         if torch.isin(next_token, stop).any():
             break
 
-print(prompt4)
-generate(transformer_weights, model_params, raw_tokens1)
+# print(prompt4)
+# generate(transformer_weights, model_params, raw_tokens1)
+prefix = "Answer only with yes we can: "
+actions = ["Yes we can", "No we don't"]
+acc_probs = get_action_loglikelihood(prefix, actions, tokenizer, transformer_weights, model_params)
+print(acc_probs)
