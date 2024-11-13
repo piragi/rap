@@ -1,7 +1,9 @@
 import os
 
+from tiktoken import model
+
 from config import ModelParams
-from main import (Tokenizer, device, get_action_loglikelihood, get_confidence_state, load_model_params, load_weights)
+from main import (Tokenizer, device, get_action_loglikelihood, get_confidence_state, get_self_eval, load_model_params, load_weights)
 from weights import TransformerWeights
 
 def test_log_likelihood(tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams):
@@ -32,6 +34,17 @@ Question 5.1: How many clips did Natalia sell in May?
     answer = tokenizer.decode(most_confident_state[0].tolist())
     assert "The answer is 24." in answer, answer
 
+def test_self_eval(tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams):
+    prefix_correct = """Question 5: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?
+Question 5.1: How many clips did Natalia sell in May?
+Answer 5.1: She sold half as many clips in May as in April. So she sold 48 / 2 = 24 clips. The answer is 24."""
+    prefix_incorrect = """Question 5: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?
+Question 5.1: How many clips did Natalia sell in May?
+Answer 5.1: She sold more clips in May as in April. So she sold approximately double the amount, so 48 * 2 = 96. The answer is 96"""
+    prob_correct = get_self_eval(prefix_correct, tokenizer, transformer_weights, model_params)
+    prob_incorrect = get_self_eval(prefix_incorrect, tokenizer, transformer_weights, model_params)
+    assert prob_correct > prob_incorrect, f'Probability over "Yes" token of correct resoning not larger than probability of incorrect reasoning: {prob_correct} < {prob_incorrect}'
+
 if __name__ == "__main__":
     print("Running tests...")
     # Load model components
@@ -43,3 +56,4 @@ if __name__ == "__main__":
 
     test_log_likelihood(tokenizer, transformer_weights, model_params)
     test_confidence_state(tokenizer, transformer_weights, model_params)
+    test_self_eval(tokenizer, transformer_weights, model_params)

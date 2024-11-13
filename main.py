@@ -168,6 +168,46 @@ def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Toke
     most_common = Counter(answers).most_common(1)[0][0]
     return states[answers.index(most_common)]
 
+def get_self_eval(reasoning: str, tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams):
+    prompt = f"{reasoning}\nIs this reasoning step correct?\n"
+    prefix_tokens = tokenizer.encode(prompt, bos=True, eos=False, allowed_special="all")
+    yes_token = tokenizer.encode("Yes", bos=False, eos=False, allowed_special="all")[0]
+
+    tokens = torch.tensor([prefix_tokens], device=device)
+    bsz, seqlen = tokens.shape
+    attn_mask = build_attn_mask(seqlen, 0)
+    freqs_cis = precompute_freqs_cis(
+        model_params.head_dim,
+        model_params.max_seq_len,
+        model_params.rope_theta,
+        model_params.use_scaled_rope,
+    )
+    kvcache = KVCache(
+        model_params.n_layers,
+        bsz,
+        model_params.max_seq_len,
+        model_params.n_local_kv_heads,
+        model_params.head_dim,
+    ).to(device)
+    (
+        logits,
+        kvcache,
+        _,
+    ) = transformer(
+        transformer_weights,
+        model_params,
+        tokens,
+        0,
+        kvcache,
+        freqs_cis[:seqlen],
+        attention_mask=attn_mask,
+    )
+
+    probs = torch.softmax(logits[0, -1], dim=-1)
+    yes_prob = probs[yes_token].item()
+
+    return yes_prob
+
 # from entropix repo
 def generate(transformer_weights: TransformerWeights,
              model_params: ModelParams,
@@ -175,7 +215,8 @@ def generate(transformer_weights: TransformerWeights,
              tokenizer: Tokenizer,
              temperature: float = 0.8,
              top_p: float = 0.9,
-             print_generated: bool = False) -> torch.Tensor:
+             print_generated: bool = False,
+             gen_length: int = MAX_SEQ_LEN) -> torch.Tensor:
     gen_tokens = None
     curr_pos = 0
     tokens = torch.tensor([tokens], dtype=torch.long).to(device)
@@ -212,7 +253,7 @@ def generate(transformer_weights: TransformerWeights,
     if print_generated: print(tokenizer.decode([next_token.item()]), end="", flush=True)
     curr_pos = seqlen
     stop = torch.Tensor(tokenizer.stop_tokens).to(device)
-    while curr_pos < MAX_SEQ_LEN:
+    while curr_pos < gen_length:
         curr_pos += 1
         logits, kvcache, _ = transformer(
             transformer_weights,
