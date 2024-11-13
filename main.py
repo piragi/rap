@@ -1,4 +1,5 @@
 import os
+from collections import Counter
 from typing import Optional
 
 import torch
@@ -105,19 +106,16 @@ def sample_top_p(probs, p):
 
 def get_action_loglikelihood(prefix: str, actions: list[str], tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                              model_params: ModelParams):
-
     curr_pos = 0
-
     bsz = len(actions)
     assert bsz <= model_params.max_batch_size, (bsz, model_params.max_batch_size)
-    prefix_tokens = tokenizer.encode(prefix, bos=True, eos=False, allowed_special="all")
+
+    prefix_tokens = tokenizer.encode(prefix, bos=False, eos=False, allowed_special="all")
     prompts_tokens = [tokenizer.encode(x, bos=False, eos=False, allowed_special="all") for x in actions]
     max_seq_len = max(len(prefix_tokens) + len(t) for t in prompts_tokens)
-    tokens = torch.full((bsz, max_seq_len), tokenizer.pad_id).cuda().long()
-    for i in range(bsz):
-        tokens[i, :len(prefix_tokens)] = torch.tensor(prefix_tokens)
-        current_prompt = prompts_tokens[i]
-        tokens[i, len(prefix_tokens):len(prefix_tokens) + len(current_prompt)] = torch.tensor(current_prompt)
+
+    sequences = [prefix_tokens + prompt + [tokenizer.pad_id] * (max_seq_len - len(prefix_tokens) - len(prompt)) for prompt in prompts_tokens]
+    tokens = torch.tensor(sequences, device=device)
 
     attn_mask = build_attn_mask(max_seq_len, curr_pos)
     freqs_cis = precompute_freqs_cis(
@@ -148,34 +146,36 @@ def get_action_loglikelihood(prefix: str, actions: list[str], tokenizer: Tokeniz
     )
 
     acc_probs = torch.zeros(bsz, dtype=torch.float32).to(device)
+    #TODO: im not so sure about adding probabilites?
     for i in range(len(prefix_tokens), max_seq_len):
         probs = torch.softmax(logits[:, i - 1, :], dim=-1)
-        for j in range(bsz):
-            if tokens[j, i] != tokenizer.pad_id:
-                acc_probs[j] += torch.log(probs[j, tokens[j, i]])
+        valid_tokens = tokens[:, i] != tokenizer.pad_id
+        acc_probs += torch.log(probs[torch.arange(bsz), tokens[:, i]]) * valid_tokens
     return acc_probs
 
-home_dir = os.path.expanduser("~")
-model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B-Instruct")
-model_params = load_model_params(os.path.join(model_path, "params.json"))
-transformer_weights = load_weights(os.path.join(model_path, "consolidated.00.pth"))
-tokenizer = Tokenizer(model_path=os.path.join(model_path, "tokenizer.model"))
-prompt4 = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are a masterful story teller. you can paint with all the colors of the wind.<|eot_id|><|start_header_id|>user<|end_header_id|>
-
-Tell me a long and wonderful story aboout the adventures of the elven mage frieren and her band of heros<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-"""
-
-raw_tokens1 = tokenizer.encode(prompt4, bos=False, eos=False, allowed_special="all")
+def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
+                         model_params: ModelParams):
+    #TODO: we could do batched generation, need to change generate function first
+    action_tokens = tokenizer.encode(action, bos=True, eos=False, allowed_special="all")
+    states = []
+    answers = []
+    for _ in range(confidence_iteration):
+        gen_tokens = generate(transformer_weights, model_params, action_tokens, tokenizer)
+        text = tokenizer.decode(gen_tokens[0].tolist())
+        answer = text.split("The answer is")[-1].split(".")[0].strip()
+        answers.append(answer)
+        states.append(gen_tokens)
+    most_common = Counter(answers).most_common(1)[0][0]
+    return states[answers.index(most_common)]
 
 # from entropix repo
-def generate(
-    transformer_weights: TransformerWeights,
-    model_params: ModelParams,
-    tokens: torch.Tensor,
-    temperature: float = 0.8,
-    top_p: float = 0.9,
-):
+def generate(transformer_weights: TransformerWeights,
+             model_params: ModelParams,
+             tokens: torch.Tensor,
+             tokenizer: Tokenizer,
+             temperature: float = 0.8,
+             top_p: float = 0.9,
+             print_generated: bool = False) -> torch.Tensor:
     gen_tokens = None
     curr_pos = 0
     tokens = torch.tensor([tokens], dtype=torch.long).to(device)
@@ -209,7 +209,7 @@ def generate(
     )
     next_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
     gen_tokens = next_token
-    print(tokenizer.decode([next_token.item()]), end="", flush=True)
+    if print_generated: print(tokenizer.decode([next_token.item()]), end="", flush=True)
     curr_pos = seqlen
     stop = torch.Tensor(tokenizer.stop_tokens).to(device)
     while curr_pos < MAX_SEQ_LEN:
@@ -226,14 +226,23 @@ def generate(
         probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
         next_token = sample_top_p(probs, top_p)
         gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
-        print(tokenizer.decode(next_token.tolist()[0]), end="", flush=True)
+        if print_generated: print(tokenizer.decode(next_token.tolist()[0]), end="", flush=True)
 
-        if torch.isin(next_token, stop).any():
-            break
+        if torch.isin(next_token, stop).any() or '\n' in tokenizer.decode(next_token.tolist()[0]): break
+    return gen_tokens
 
-# print(prompt4)
-# generate(transformer_weights, model_params, raw_tokens1)
-prefix = "Answer only with yes we can: "
-actions = ["Yes we can", "No we don't"]
-acc_probs = get_action_loglikelihood(prefix, actions, tokenizer, transformer_weights, model_params)
-print(acc_probs)
+if __name__ == "__main__":
+    home_dir = os.path.expanduser("~")
+    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B-Instruct")
+    model_params = load_model_params(os.path.join(model_path, "params.json"))
+    transformer_weights = load_weights(os.path.join(model_path, "consolidated.00.pth"))
+    tokenizer = Tokenizer(model_path=os.path.join(model_path, "tokenizer.model"))
+    prompt4 = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are a masterful story teller. you can paint with all the colors of the wind.<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Tell me a long and wonderful story aboout the adventures of the elven mage frieren and her band of heros<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+"""
+
+    raw_tokens1 = tokenizer.encode(prompt4, bos=False, eos=False, allowed_special="all")
+    print(prompt4)
+    generate(transformer_weights, model_params, raw_tokens1, tokenizer)
