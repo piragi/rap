@@ -1,6 +1,7 @@
 import os
+import time
 from collections import Counter
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 
@@ -154,8 +155,7 @@ def get_action_loglikelihood(prefix: str, actions: list[str], tokenizer: Tokeniz
     return acc_probs
 
 def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
-                         model_params: ModelParams):
-    #TODO: we could do batched generation, need to change generate function first
+                         model_params: ModelParams) -> Tuple[torch.Tensor, float]:
     action_tokens = tokenizer.encode(action, bos=True, eos=False, allowed_special="all")
     states = []
     answers = []
@@ -165,10 +165,15 @@ def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Toke
         answer = text.split("The answer is")[-1].split(".")[0].strip()
         answers.append(answer)
         states.append(gen_tokens)
-    most_common = Counter(answers).most_common(1)[0][0]
-    return states[answers.index(most_common)]
 
-def get_self_eval(reasoning: str, tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams):
+    counter = Counter(answers)
+    most_common = counter.most_common(1)[0]
+    most_common_answer = most_common[0]
+    most_common_count = most_common[1]
+    confidence = most_common_count / confidence_iteration
+    return states[answers.index(most_common_answer)], confidence
+
+def get_self_eval(reasoning: str, tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams) -> float:
     prompt = f"{reasoning}\nIs this reasoning step correct?\n"
     prefix_tokens = tokenizer.encode(prompt, bos=True, eos=False, allowed_special="all")
     yes_token = tokenizer.encode("Yes", bos=False, eos=False, allowed_special="all")[0]
@@ -217,7 +222,6 @@ def generate(transformer_weights: TransformerWeights,
              top_p: float = 0.9,
              print_generated: bool = False,
              gen_length: int = MAX_SEQ_LEN) -> torch.Tensor:
-    gen_tokens = None
     curr_pos = 0
     tokens = torch.tensor([tokens], dtype=torch.long).to(device)
     bsz, seqlen = tokens.shape
@@ -235,11 +239,7 @@ def generate(transformer_weights: TransformerWeights,
         model_params.n_local_kv_heads,
         model_params.head_dim,
     ).to(device)
-    (
-        logits,
-        kvcache,
-        _,
-    ) = transformer(
+    logits, kvcache, _ = transformer(
         transformer_weights,
         model_params,
         tokens,
@@ -248,11 +248,16 @@ def generate(transformer_weights: TransformerWeights,
         freqs_cis[:seqlen],
         attention_mask=attn_mask,
     )
+
     next_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
     gen_tokens = next_token
-    if print_generated: print(tokenizer.decode([next_token.item()]), end="", flush=True)
+
+    # Clear logits after use
+    del logits
+
     curr_pos = seqlen
     stop = torch.Tensor(tokenizer.stop_tokens).to(device)
+
     while curr_pos < gen_length:
         curr_pos += 1
         logits, kvcache, _ = transformer(
@@ -267,9 +272,10 @@ def generate(transformer_weights: TransformerWeights,
         probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
         next_token = sample_top_p(probs, top_p)
         gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
-        if print_generated: print(tokenizer.decode(next_token.tolist()[0]), end="", flush=True)
 
-        if torch.isin(next_token, stop).any() or '\n' in tokenizer.decode(next_token.tolist()[0]): break
+        if torch.isin(next_token, stop).any() or '\n' in tokenizer.decode(next_token.tolist()[0]):
+            break
+
     return gen_tokens
 
 if __name__ == "__main__":
