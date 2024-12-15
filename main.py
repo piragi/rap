@@ -156,11 +156,12 @@ def get_action_loglikelihood(prefix: str, actions: list[str], tokenizer: Tokeniz
 
 def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                          model_params: ModelParams) -> Tuple[torch.Tensor, float]:
-    # Encode action once
-    action_tokens = tokenizer.encode(action, bos=True, eos=False, allowed_special="all")
+    print("confidence_state")
+    # Encode action and convert to tensor right away
+    action_tokens = torch.tensor(tokenizer.encode(action, bos=True, eos=False, allowed_special="all"), device=device)
 
     # Create batch of identical sequences
-    batched_tokens = torch.tensor(action_tokens).repeat(confidence_iteration, 1)
+    batched_tokens = action_tokens.repeat(confidence_iteration, 1)
 
     # Generate all sequences at once
     gen_tokens = generate(transformer_weights, model_params, batched_tokens, tokenizer, gen_length=len(action_tokens) + 200)
