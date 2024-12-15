@@ -156,22 +156,42 @@ def get_action_loglikelihood(prefix: str, actions: list[str], tokenizer: Tokeniz
 
 def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                          model_params: ModelParams) -> Tuple[torch.Tensor, float]:
+    # Encode action once
     action_tokens = tokenizer.encode(action, bos=True, eos=False, allowed_special="all")
-    states = []
-    answers = []
-    for _ in range(confidence_iteration):
-        gen_tokens = generate(transformer_weights, model_params, action_tokens, tokenizer, gen_length=len(action_tokens) + 200)
-        text = tokenizer.decode(gen_tokens[0].tolist())
-        answer = text.split("The answer is")[-1].split(".")[0].strip()
-        answers.append(answer)
-        states.append(gen_tokens)
 
+    # Create batch of identical sequences
+    batched_tokens = torch.tensor(action_tokens).repeat(confidence_iteration, 1)
+
+    # Generate all sequences at once
+    gen_tokens = generate(transformer_weights, model_params, batched_tokens, tokenizer, gen_length=len(action_tokens) + 200)
+
+    # Process all generated sequences
+    answers = []
+    for i in range(confidence_iteration):
+        text = tokenizer.decode(gen_tokens[i].tolist())
+        parts = text.split("The answer is")
+        if len(parts) > 1:
+            answer_part = parts[-1]
+            # Look for the first sentence terminator
+            for terminator in ['.', '\n', '!', '?']:
+                if terminator in answer_part:
+                    answer = answer_part.split(terminator)[0].strip()
+                    break
+            else:
+                answer = answer_part.strip()
+        else:
+            answer = ""
+        answers.append(answer)
+
+    # Find most common answer
     counter = Counter(answers)
     most_common = counter.most_common(1)[0]
     most_common_answer = most_common[0]
     most_common_count = most_common[1]
     confidence = most_common_count / confidence_iteration
-    return states[answers.index(most_common_answer)], confidence
+
+    # Return the first generated sequence that matches the most common answer
+    return gen_tokens[answers.index(most_common_answer)].unsqueeze(0), confidence
 
 def get_self_eval(reasoning: str, new_subquestion: str, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                   model_params: ModelParams) -> float:
@@ -226,8 +246,13 @@ def generate(transformer_weights: TransformerWeights,
              print_generated: bool = False,
              gen_length: int = MAX_SEQ_LEN) -> torch.Tensor:
     curr_pos = 0
-    tokens = torch.tensor([tokens], dtype=torch.long).to(device)
+
+    # Handle both single sequence and batch inputs
+    if len(tokens.shape) == 1:
+        tokens = tokens.unsqueeze(0)
+    tokens = tokens.to(device)
     bsz, seqlen = tokens.shape
+
     attn_mask = build_attn_mask(seqlen, curr_pos)
     freqs_cis = precompute_freqs_cis(
         model_params.head_dim,
@@ -242,6 +267,7 @@ def generate(transformer_weights: TransformerWeights,
         model_params.n_local_kv_heads,
         model_params.head_dim,
     ).to(device)
+
     logits, kvcache, _ = transformer(
         transformer_weights,
         model_params,
@@ -256,13 +282,15 @@ def generate(transformer_weights: TransformerWeights,
     next_token = sample_top_p(probs, top_p)
     gen_tokens = next_token
 
-    # Clear logits after use
     del logits
 
     curr_pos = seqlen
     stop = torch.Tensor(tokenizer.stop_tokens).to(device)
 
-    while curr_pos < gen_length:
+    # Track which sequences have finished generating
+    finished = torch.zeros(bsz, dtype=torch.bool, device=device)
+
+    while curr_pos < gen_length and not finished.all():
         curr_pos += 1
         logits, kvcache, _ = transformer(
             transformer_weights,
@@ -273,12 +301,23 @@ def generate(transformer_weights: TransformerWeights,
             freqs_cis[curr_pos:curr_pos + 1],
         )
 
-        probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
-        next_token = sample_top_p(probs, top_p)
+        # Only generate for unfinished sequences
+        active_mask = ~finished
+        if active_mask.any():
+            probs = torch.softmax(logits[active_mask, -1] / temperature, dim=-1)
+            next_active_tokens = sample_top_p(probs, top_p)
+
+            # Update next_token only for active sequences
+            next_token = torch.zeros_like(next_token)
+            next_token[active_mask] = next_active_tokens
+
         gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
 
-        if torch.isin(next_token, stop).any() or '\n' in tokenizer.decode(next_token.tolist()[0]):
-            break
+        # Update finished status for each sequence
+        for i in range(bsz):
+            if not finished[i]:
+                if (torch.isin(next_token[i], stop) or '\n' in tokenizer.decode(next_token[i].tolist())):
+                    finished[i] = True
 
     return gen_tokens
 
