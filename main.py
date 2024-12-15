@@ -160,7 +160,7 @@ def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Toke
     states = []
     answers = []
     for _ in range(confidence_iteration):
-        gen_tokens = generate(transformer_weights, model_params, action_tokens, tokenizer)
+        gen_tokens = generate(transformer_weights, model_params, action_tokens, tokenizer, gen_length=len(action_tokens) + 200)
         text = tokenizer.decode(gen_tokens[0].tolist())
         answer = text.split("The answer is")[-1].split(".")[0].strip()
         answers.append(answer)

@@ -2,8 +2,8 @@ import os
 import time
 
 from config import ModelParams
-from main import (Tokenizer, device, get_action_loglikelihood, get_confidence_state, get_self_eval, load_model_params, load_weights)
-from mcts import MCTSNode, mcts
+from main import (Tokenizer, get_action_loglikelihood, get_confidence_state, get_self_eval, load_model_params, load_weights)
+from mcts import mcts
 from weights import TransformerWeights
 from world_model import State, SubStep, predict_action, predict_state
 

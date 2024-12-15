@@ -119,7 +119,7 @@ Answer 4.2: The car has driven a total of 23 meters around the ring. It travels 
 if __name__ == "__main__":
     # Load model components
     home_dir = os.path.expanduser("~")
-    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B-Instruct")
+    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B")
     model_params = load_model_params(os.path.join(model_path, "params.json"))
     transformer_weights = load_weights(os.path.join(model_path, "consolidated.00.pth"))
     tokenizer = Tokenizer(model_path=os.path.join(model_path, "tokenizer.model"))
