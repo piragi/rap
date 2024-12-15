@@ -57,15 +57,16 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
     for _ in range(depth_limit):
         if current_node.state is None:
             current_node.state = predict_state(current_node.parent.state, current_node.action, tokenizer, transformer_weights, model_params)
-            #TODO: reward calculation could be moved to selection
             current_node.reward = calculate_reward(current_node.fast_reward, current_node.state.states[-1].confidence)
         if current_node.is_terminal():
             path.append(current_node)
             break
+
         if not current_node.children:
-            #TODO: parallelization potential through using kvcache and batched state
-            for _ in range(action_generation):
-                action, fast_reward = predict_action(current_node.state, tokenizer, transformer_weights, model_params)
+            # Generate all actions at once
+            actions_with_rewards = predict_action_batch(current_node.state, action_generation, tokenizer, transformer_weights, model_params)
+            # Create children nodes
+            for action, fast_reward in actions_with_rewards:
                 current_node.children.append(MCTSNode(state=None, action=action, parent=current_node, reward=0., fast_reward=fast_reward))
 
         current_node = max(current_node.children, key=lambda child: child.fast_reward)

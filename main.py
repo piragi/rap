@@ -194,14 +194,33 @@ def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Toke
     # Return the first generated sequence that matches the most common answer
     return gen_tokens[answers.index(most_common_answer)].unsqueeze(0), confidence
 
-def get_self_eval(reasoning: str, new_subquestion: str, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
-                  model_params: ModelParams) -> float:
-    prompt = f"{USEFUL_PREFIX}{reasoning}{new_subquestion}\nIs the new question useful? "
-    prefix_tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")
-    yes_token = tokenizer.encode("Yes", bos=False, eos=False, allowed_special="all")[0]
-    no_token = tokenizer.encode("No", bos=False, eos=False, allowed_special="all")[0]
+def get_self_eval(reasoning: Union[str, List[str]], new_subquestion: Union[str, List[str]], tokenizer: Tokenizer,
+                  transformer_weights: TransformerWeights, model_params: ModelParams) -> Union[float, List[float]]:
+    """
+    Evaluate usefulness of subquestions in batch.
+    
+    Args:
+        reasoning: Single reasoning string or list of reasoning strings
+        new_subquestion: Single question or list of questions to evaluate
+        
+    Returns:
+        If inputs are strings: returns single confidence float
+        If inputs are lists: returns list of confidence floats
+    """
+    if isinstance(reasoning, str):
+        prompts = [f"{USEFUL_PREFIX}{reasoning}{new_subquestion}\nIs the new question useful? "]
+        is_single = True
+    else:
+        prompts = [f"{USEFUL_PREFIX}{r}{q}\nIs the new question useful? " for r, q in zip(reasoning, new_subquestion)]
+        is_single = False
 
-    tokens = torch.tensor([prefix_tokens], device=device)
+    # Encode all prompts
+    tokens_list = [tokenizer.encode(p, bos=False, eos=False, allowed_special="all") for p in prompts]
+    # Pad to max length
+    max_len = max(len(t) for t in tokens_list)
+    padded_tokens = [t + [tokenizer.pad_id] * (max_len - len(t)) for t in tokens_list]
+    tokens = torch.tensor(padded_tokens, dtype=torch.long, device=device)
+
     bsz, seqlen = tokens.shape
     attn_mask = build_attn_mask(seqlen, 0)
     freqs_cis = precompute_freqs_cis(
@@ -217,11 +236,8 @@ def get_self_eval(reasoning: str, new_subquestion: str, tokenizer: Tokenizer, tr
         model_params.n_local_kv_heads,
         model_params.head_dim,
     ).to(device)
-    (
-        logits,
-        kvcache,
-        _,
-    ) = transformer(
+
+    logits, kvcache, _ = transformer(
         transformer_weights,
         model_params,
         tokens,
@@ -231,11 +247,15 @@ def get_self_eval(reasoning: str, new_subquestion: str, tokenizer: Tokenizer, tr
         attention_mask=attn_mask,
     )
 
-    logits = logits[0, -1][[yes_token, no_token]]  # Only get logits for Yes/No
-    probs = torch.softmax(logits, dim=-1)
-    yes_prob = probs[0].item()  # Yes is first token
+    yes_token = tokenizer.encode("Yes", bos=False, eos=False, allowed_special="all")[0]
+    no_token = tokenizer.encode("No", bos=False, eos=False, allowed_special="all")[0]
 
-    return yes_prob
+    # Get probabilities for Yes/No for all sequences
+    batch_logits = logits[:, -1][:, [yes_token, no_token]]  # Shape: [batch_size, 2]
+    probs = torch.softmax(batch_logits, dim=-1)
+    yes_probs = probs[:, 0].tolist()  # Yes probability for each sequence
+
+    return yes_probs[0] if is_single else yes_probs
 
 # from entropix repo
 def generate(transformer_weights: TransformerWeights,
@@ -247,6 +267,8 @@ def generate(transformer_weights: TransformerWeights,
              print_generated: bool = False,
              gen_length: int = MAX_SEQ_LEN) -> torch.Tensor:
     curr_pos = 0
+
+    tokens = torch.tensor(tokens, dtype=torch.long)
 
     # Handle both single sequence and batch inputs
     if len(tokens.shape) == 1:
