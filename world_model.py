@@ -1,4 +1,4 @@
-from typing import List, NamedTuple, Optional, Tuple, Union
+from typing import List, NamedTuple, Tuple, Union
 
 import torch
 
@@ -8,6 +8,11 @@ from tokenizer import Tokenizer
 from weights import TransformerWeights
 
 Action = str
+
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
 
 class SubStep(NamedTuple):
     subquestion: Action
@@ -19,90 +24,67 @@ class State(NamedTuple):
     prefix: str
     question: str
 
+def prepare_tokens(input_data, tokenizer):
+    """Helper to prepare tokens for generate function"""
+    tokens = [tokenizer.encode(x, bos=False, eos=False, allowed_special="all") for x in input_data]
+    max_len = max(len(t) for t in tokens)
+    padded = [t + [tokenizer.pad_id] * (max_len - len(t)) for t in tokens]
+    return torch.tensor(padded, device=device)
+
 def advance_tokens(prompt: Union[str, List[str]], tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams):
     """
     Generate tokens for one or multiple prompts.
-    
-    Args:
-        prompt: Single prompt string or list of prompts
-        tokenizer: Tokenizer instance
-        transformer_weights: Model weights
-        model_params: Model parameters
-        
-    Returns:
-        If input is string: returns generated text string
-        If input is list: returns list of generated text strings
     """
-    if isinstance(prompt, str):
-        tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')
-        is_single = True
-    else:
-        tokens = [tokenizer.encode(p, bos=False, eos=False, allowed_special='all') for p in prompt]
-        # Pad to max length
-        max_len = max(len(t) for t in tokens)
-        tokens = [t + [tokenizer.pad_id] * (max_len - len(t)) for t in tokens]
-        is_single = False
+    tokens = [tokenizer.encode(p, bos=False, eos=False, allowed_special='all') for p in prompt]
+    max_len = max(len(t) for t in tokens)
+    tokens = [t + [tokenizer.pad_id] * (max_len - len(t)) for t in tokens]
+    tokens = torch.tensor(tokens, device=device)
 
     generated_tokens = generate(transformer_weights, model_params, tokens, tokenizer)
-    torch.cuda.empty_cache()
 
-    if is_single:
-        return tokenizer.decode(generated_tokens[0].tolist()).strip()
-    else:
-        return [tokenizer.decode(tokens.tolist()).strip() for tokens in generated_tokens]
+    final_texts = []
+    for seq in generated_tokens:
+        text = tokenizer.decode(seq.tolist())
+        if '\n' in text:
+            text = text.split('\n')[0]
+        final_texts.append(text)
 
-def predict_action(state: State,
-                   tokenizer: Tokenizer,
-                   transformer_weights: TransformerWeights,
-                   model_params: ModelParams,
-                   batch_size: Optional[int] = None) -> Union[Tuple[Action, float], List[Tuple[Action, float]]]:
+    print(final_texts)
+    return final_texts
+
+def predict_action(state: State, tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams,
+                   batch_size: int) -> List[Tuple[Action, float]]:
     """
     Predict next action(s) given current state.
-    
-    Args:
-        state: Current state
-        tokenizer: Tokenizer instance 
-        transformer_weights: Model weights
-        model_params: Model parameters
-        batch_size: If provided, generate this many actions at once
-        
-    Returns:
-        If batch_size is None: returns (action, confidence) tuple
-        If batch_size is int: returns list of (action, confidence) tuples
     """
+    # Build prompt
     s_t0 = state.prefix + f"\n\n{state.question}"
     s_t0 += ''.join(f'\nQuestion 5.{i+1}: {substate.subquestion}\nAnswer 5.{i+1}: {substate.subanswer}' for i, substate in enumerate(state.states))
     action = f'\nQuestion 5.{len(state.states)+1}: '
 
-    if batch_size is None:
-        # Single prediction
-        subquestion = advance_tokens(s_t0 + action, tokenizer, transformer_weights, model_params)
-        a_t0 = s_t0 + f'\nNew question 5.{len(state.states)+1}: {subquestion}'
-        confidence = get_self_eval(a_t0, subquestion, tokenizer, transformer_weights, model_params)
-        return subquestion, confidence
-    else:
-        # Batch prediction
-        prompts = [s_t0 + action] * batch_size
-        subquestions = advance_tokens(prompts, tokenizer, transformer_weights, model_params)
+    # Batch prediction
+    prompts = [s_t0 + action] * batch_size
+    subquestions = advance_tokens(prompts, tokenizer, transformer_weights, model_params)
 
-        # Batch evaluate all subquestions at once
-        a_t0s = [s_t0 + f'\nNew question 5.{len(state.states)+1}: {subq}' for subq in subquestions]
-        confidences = get_self_eval(a_t0s, subquestions, tokenizer, transformer_weights, model_params)
+    # Batch evaluate
+    a_t0s = [s_t0 + f'\nNew question 5.{len(state.states)+1}: {subq}' for subq in subquestions]
+    confidences = get_self_eval(a_t0s, subquestions, tokenizer, transformer_weights, model_params)
 
-        return list(zip(subquestions, confidences))
+    return list(zip(subquestions, confidences))
 
 def predict_state(state: State, action: Action, tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams) -> State:
     """Generate next state given an action"""
+    # Build prompt
     s_t0 = state.prefix + f"\n\n{state.question}"
     s_t0 += ''.join(f'\nQuestion 5.{i+1}: {substate.subquestion}\nAnswer 5.{i+1}: {substate.subanswer}' for i, substate in enumerate(state.states))
     s_t0 += f'\nQuestion 5.{len(state.states)+1}: {action}\nAnswer 5.{len(state.states)+1}: '
 
+    # Get confident answe
     confidence_tokens, confidence = get_confidence_state(s_t0, 8, tokenizer, transformer_weights, model_params)
     answer = tokenizer.decode(confidence_tokens[0].tolist())
-    answer = answer.strip()
-    return State(states=[*state.states, SubStep(subquestion=action, subanswer=answer, confidence=confidence)],
+    print(answer)
+
+    # Create new state
+    return State(states=[*state.states, SubStep(subquestion=action, subanswer=answer.strip(), confidence=confidence)],
                  prefix=state.prefix,
                  question=state.question)
-
-def generate_with_reward():
-    return

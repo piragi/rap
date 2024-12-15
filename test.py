@@ -125,7 +125,7 @@ def test_predict_state(tokenizer: Tokenizer, transformer_weights: TransformerWei
 def test_mcts_iteration(tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams):
     start = time.time()
     state = State(states=[], prefix=PREFIX, question=QUESTION)
-    best_state = mcts(state, 5, 5, 5, tokenizer, transformer_weights, model_params)
+    best_state = mcts(state, 10, 5, 1, tokenizer, transformer_weights, model_params)
     answer = best_state.states[-1].subanswer
     end = time.time()
     assert answer.endswith("The answer is 72."), answer
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     print("Running tests...")
     # Load model components
     home_dir = os.path.expanduser("~")
-    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B-Instruct")
+    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B")
     model_params = load_model_params(os.path.join(model_path, "params.json"))
     transformer_weights = load_weights(os.path.join(model_path, "consolidated.00.pth"))
     tokenizer = Tokenizer(model_path=os.path.join(model_path, "tokenizer.model"))

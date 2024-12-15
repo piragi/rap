@@ -67,7 +67,6 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
             actions_with_rewards = predict_action(current_node.state, tokenizer, transformer_weights, model_params, action_generation)
             # Create children nodes
             for action, fast_reward in actions_with_rewards:
-                print(action)
                 current_node.children.append(MCTSNode(state=None, action=action, parent=current_node, reward=0., fast_reward=fast_reward))
 
         current_node = max(current_node.children, key=lambda child: child.fast_reward)
@@ -136,17 +135,18 @@ def print_mcts(root: MCTSNode, prefix: str = "", is_last: bool = True, filename:
                      f"{prefix}    Answer: {last_state.subanswer}]")
     else:
         node_info = f"{prefix}{connector}[Visits: {root.visits}, Fast reward: {root.fast_reward:.2f}, Reward: {root.reward:.2f}]"
-    
+
     # Print to console
     print(node_info)
-    
+
     # Write to file
     with open(filename, 'a') as f:
         print(node_info, file=f)
-    
+
     # Handle children
     child_prefix = prefix + ("    " if is_last else "│   ")
     if root.children:
         for i, child in enumerate(root.children):
             is_last_child = i == len(root.children) - 1
             print_mcts(child, child_prefix, is_last_child, filename)
+

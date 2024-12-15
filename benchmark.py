@@ -84,10 +84,10 @@ Answer 4.2: The car has driven a total of 23 meters around the ring. It travels 
 
         # Write question and target to trace file before MCTS
         with open(trace_file, 'a') as f:
-            print("\n" + "="*50, file=f)
+            print("\n" + "=" * 50, file=f)
             print(f"Main Question: {question}", file=f)
             print(f"Target Answer: {target}", file=f)
-            print("="*50 + "\n", file=f)
+            print("=" * 50 + "\n", file=f)
 
         # Initialize state with question
         init_state = State(states=[], prefix=prefix, question="Question 5: " + question)
@@ -144,10 +144,10 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         transformer_weights=transformer_weights,
         model_params=model_params,
-        n_samples=100,  # Set to None to run on full dataset
-        rollouts=6,
-        depth_limit=6,
-        action_generation=4)
+        n_samples=1,  # Set to None to run on full dataset
+        rollouts=2,
+        depth_limit=2,
+        action_generation=2)
 
     # Save results
     with open('gsm8k_results.json', 'w') as f:

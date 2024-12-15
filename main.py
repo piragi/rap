@@ -156,14 +156,14 @@ def get_action_loglikelihood(prefix: str, actions: list[str], tokenizer: Tokeniz
 
 def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                          model_params: ModelParams) -> Tuple[torch.Tensor, float]:
-    # Encode action and convert to tensor right away
-    action_tokens = torch.tensor(tokenizer.encode(action, bos=True, eos=False, allowed_special="all"), device=device)
+    """
+    Get confidence state by running multiple generations and finding the most common answer.
+    """
 
-    # Create batch of identical sequences
-    batched_tokens = action_tokens.repeat(confidence_iteration, 1)
-
-    # Generate all sequences at once
-    gen_tokens = generate(transformer_weights, model_params, batched_tokens, tokenizer, gen_length=len(action_tokens) + 200)
+    prompts = [action] * confidence_iteration
+    batched_tokens = prepare_tokens(prompts, tokenizer)
+    input_length = batched_tokens.size(1)
+    gen_tokens = generate(transformer_weights, model_params, batched_tokens, tokenizer, max_gen_len=input_length + 200)
 
     # Process all generated sequences
     answers = []
@@ -183,18 +183,19 @@ def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Toke
             answer = ""
         answers.append(answer)
 
+    print(answers)
+
     # Find most common answer
     counter = Counter(answers)
     most_common = counter.most_common(1)[0]
-    most_common_answer = most_common[0]
-    most_common_count = most_common[1]
+    most_common_answer, most_common_count = most_common
     confidence = most_common_count / confidence_iteration
 
     # Return the first generated sequence that matches the most common answer
     return gen_tokens[answers.index(most_common_answer)].unsqueeze(0), confidence
 
 def get_self_eval(reasoning: Union[str, List[str]], new_subquestion: Union[str, List[str]], tokenizer: Tokenizer,
-                  transformer_weights: TransformerWeights, model_params: ModelParams) -> Union[float, List[float]]:
+                  transformer_weights: TransformerWeights, model_params: ModelParams) -> List[float]:
     """
     Evaluate usefulness of subquestions in batch.
     
@@ -206,12 +207,7 @@ def get_self_eval(reasoning: Union[str, List[str]], new_subquestion: Union[str, 
         If inputs are strings: returns single confidence float
         If inputs are lists: returns list of confidence floats
     """
-    if isinstance(reasoning, str):
-        prompts = [f"{USEFUL_PREFIX}{reasoning}{new_subquestion}\nIs the new question useful? "]
-        is_single = True
-    else:
-        prompts = [f"{USEFUL_PREFIX}{r}{q}\nIs the new question useful? " for r, q in zip(reasoning, new_subquestion)]
-        is_single = False
+    prompts = [f"{USEFUL_PREFIX}{r}{q}\nIs the new question useful? " for r, q in zip(reasoning, new_subquestion)]
 
     # Encode all prompts
     tokens_list = [tokenizer.encode(p, bos=False, eos=False, allowed_special="all") for p in prompts]
@@ -254,34 +250,47 @@ def get_self_eval(reasoning: Union[str, List[str]], new_subquestion: Union[str, 
     probs = torch.softmax(batch_logits, dim=-1)
     yes_probs = probs[:, 0].tolist()  # Yes probability for each sequence
 
-    return yes_probs[0] if is_single else yes_probs
+    return yes_probs
+
+def prepare_tokens(input_data, tokenizer: Tokenizer):
+    """Helper to prepare tokens for generate function"""
+    if isinstance(input_data, str):
+        tokens = tokenizer.encode(input_data, bos=False, eos=False, allowed_special="all")
+        return torch.tensor([tokens], device=device)
+    elif isinstance(input_data, list):
+        # Batch of strings
+        tokens = [tokenizer.encode(x, bos=False, eos=False, allowed_special="all") for x in input_data]
+        max_len = max(len(t) for t in tokens)
+        padded = [t + [tokenizer.eos_id] * (max_len - len(t)) for t in tokens]
+        return torch.tensor(padded, device=device)
+    else:
+        return input_data.to(device)  # Assume it's already a tensor
 
 # from entropix repo
-def generate(transformer_weights: TransformerWeights,
-             model_params: ModelParams,
-             tokens: torch.Tensor,
-             tokenizer: Tokenizer,
-             temperature: float = 0.8,
-             top_p: float = 0.90,
-             print_generated: bool = False,
-             gen_length: int = MAX_SEQ_LEN) -> torch.Tensor:
-    curr_pos = 0
-
-    tokens = torch.tensor(tokens, dtype=torch.long)
-
-    # Handle both single sequence and batch inputs
-    if len(tokens.shape) == 1:
-        tokens = tokens.unsqueeze(0)
+def generate(
+    transformer_weights: TransformerWeights,
+    model_params: ModelParams,
+    tokens: torch.Tensor,
+    tokenizer: Tokenizer,
+    temperature: float = 0.8,
+    top_p: float = 0.90,
+    max_gen_len: int = 200,
+) -> torch.Tensor:
+    """
+    Generate tokens from an input tensor.
+    Assumes tokens is already properly batched and padded if needed.
+    """
     tokens = tokens.to(device)
     bsz, seqlen = tokens.shape
+    curr_pos = 0
 
-    attn_mask = build_attn_mask(seqlen, curr_pos)
     freqs_cis = precompute_freqs_cis(
         model_params.head_dim,
         model_params.max_seq_len,
         model_params.rope_theta,
         model_params.use_scaled_rope,
     )
+
     kvcache = KVCache(
         model_params.n_layers,
         bsz,
@@ -290,6 +299,7 @@ def generate(transformer_weights: TransformerWeights,
         model_params.head_dim,
     ).to(device)
 
+    attn_mask = build_attn_mask(seqlen, curr_pos)
     logits, kvcache, _ = transformer(
         transformer_weights,
         model_params,
@@ -302,46 +312,36 @@ def generate(transformer_weights: TransformerWeights,
 
     probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
     next_token = sample_top_p(probs, top_p)
-    gen_tokens = next_token
+    generated = [next_token]
 
-    del logits
-
+    finished = torch.zeros(bsz, dtype=torch.bool, device=device)
     curr_pos = seqlen
+
     stop = torch.Tensor(tokenizer.stop_tokens).to(device)
 
-    # Track which sequences have finished generating
-    finished = torch.zeros(bsz, dtype=torch.bool, device=device)
-
-    while curr_pos < gen_length and not finished.all():
+    while curr_pos < seqlen + max_gen_len and not finished.all():
         curr_pos += 1
-        logits, kvcache, _ = transformer(
-            transformer_weights,
-            model_params,
-            next_token,
-            curr_pos,
-            kvcache,
-            freqs_cis[curr_pos:curr_pos + 1],
-        )
+        active = ~finished
+        if active.any():
+            logits, kvcache, _ = transformer(
+                transformer_weights,
+                model_params,
+                next_token,
+                curr_pos,
+                kvcache,
+                freqs_cis[curr_pos:curr_pos + 1],
+            )
+            probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
+            next_candidates = sample_top_p(probs, top_p)
+            next_token = torch.where(finished.unsqueeze(1), next_token, next_candidates)
 
-        # Only generate for unfinished sequences
-        active_mask = ~finished
-        if active_mask.any():
-            probs = torch.softmax(logits[active_mask, -1] / temperature, dim=-1)
-            next_active_tokens = sample_top_p(probs, top_p)
-
-            # Update next_token only for active sequences
-            next_token = torch.zeros_like(next_token)
-            next_token[active_mask] = next_active_tokens
-
-        gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
-
-        # Update finished status for each sequence
-        for i in range(bsz):
-            if not finished[i]:
-                if (torch.isin(next_token[i], stop) or '\n' in tokenizer.decode(next_token[i].tolist())):
-                    finished[i] = True
-
-    return gen_tokens
+            for i in range(bsz):
+                if not finished[i]:
+                    token_str = tokenizer.decode([next_token[i].item()])
+                    if torch.isin(next_token, stop).any() or '\n' in token_str:
+                        finished[i] = True
+            generated.append(next_token)
+    return torch.cat(generated, dim=1)
 
 if __name__ == "__main__":
     home_dir = os.path.expanduser("~")
