@@ -64,7 +64,7 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
 
         if not current_node.children:
             # Generate all actions at once
-            actions_with_rewards = predict_action_batch(current_node.state, action_generation, tokenizer, transformer_weights, model_params)
+            actions_with_rewards = predict_action(current_node.state, action_generation, tokenizer, transformer_weights, model_params)
             # Create children nodes
             for action, fast_reward in actions_with_rewards:
                 current_node.children.append(MCTSNode(state=None, action=action, parent=current_node, reward=0., fast_reward=fast_reward))

@@ -1,6 +1,6 @@
 import os
 from collections import Counter
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import torch
 

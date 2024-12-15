@@ -19,8 +19,8 @@ source ~/$ENV_NAME/bin/activate
 
 # Verify we're in the virtual environment
 if [ -z "$VIRTUAL_ENV" ]; then
-    echo "Error: Virtual environment activation failed"
-    exit 1
+echo "Error: Virtual environment activation failed"
+exit 1
 fi
 
 echo "Using Python: $(which python)"
@@ -46,15 +46,15 @@ cd $(basename $REPO_URL .git)
 
 # Install project-specific requirements if they exist
 if [ -f "requirements.txt" ]; then
-    echo "Installing project requirements..."
-    pip install -r requirements.txt
+echo "Installing project requirements..."
+pip install -r requirements.txt
 fi
 
 # Download the LLaMA model
 echo "Downloading LLaMA model..."
 if [ -z "$META_URL" ]; then
-    echo "Error: META_URL environment variable not set"
-    exit 1
+echo "Error: META_URL environment variable not set"
+exit 1
 fi
 llama model download --source meta --model-id Llama3.2-3B --meta-url "$META_URL"
 
@@ -62,10 +62,10 @@ llama model download --source meta --model-id Llama3.2-3B --meta-url "$META_URL"
 echo "Verifying model files..."
 required_files=("consolidated.00.pth" "params.json" "tokenizer.model")
 for file in "${required_files[@]}"; do
-    if [ ! -f ~/.llama/checkpoints/Llama3.2-3B/$file ]; then
-        echo "Error: Missing required model file: $file"
-        exit 1
-    fi
+if [ ! -f ~/.llama/checkpoints/Llama3.2-3B/$file ]; then
+echo "Error: Missing required model file: $file"
+exit 1
+fi
 done
 
 # Download GSM8K dataset (it will be cached)
