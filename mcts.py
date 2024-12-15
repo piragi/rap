@@ -64,9 +64,10 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
 
         if not current_node.children:
             # Generate all actions at once
-            actions_with_rewards = predict_action(current_node.state, action_generation, tokenizer, transformer_weights, model_params)
+            actions_with_rewards = predict_action(current_node.state, tokenizer, transformer_weights, model_params, action_generation)
             # Create children nodes
             for action, fast_reward in actions_with_rewards:
+                print(action)
                 current_node.children.append(MCTSNode(state=None, action=action, parent=current_node, reward=0., fast_reward=fast_reward))
 
         current_node = max(current_node.children, key=lambda child: child.fast_reward)
@@ -112,27 +113,40 @@ def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: 
         backpropagation(path)
 
     reward, best_path = get_highest_reward_path(root)
+    print_mcts(root)
     if reward == float('-inf'):
         print("No valid complete path found")
         return None
-    print_mcts(root)
     return best_path[-1].state
 
-def print_mcts(root: MCTSNode, prefix: str = "", is_last: bool = True):
-    # Print current node
+def print_mcts(root: MCTSNode, prefix: str = "", is_last: bool = True, filename: str = "mcts_trace.txt"):
+    """
+    Print MCTS tree to both console and file, including detailed state information.
+    Creates file if it doesn't exist.
+    """
+    # Format the node information
     connector = "└── " if is_last else "├── "
     if root.state is not None and len(root.state.states) != 0:
-        print(
-            f"{prefix}{connector}[Visits: {root.visits}, Fast reward: {root.fast_reward:.2f}, Reward: {root.reward:.2f}, Action: {root.state.states[-1].subquestion}]"
-        )
+        # Get the last state's question and answer
+        last_state = root.state.states[-1]
+        node_info = (f"{prefix}{connector}[Visits: {root.visits}, "
+                     f"Fast reward: {root.fast_reward:.2f}, "
+                     f"Reward: {root.reward:.2f}\n"
+                     f"{prefix}    Question: {last_state.subquestion}\n"
+                     f"{prefix}    Answer: {last_state.subanswer}]")
     else:
-        print(f"{prefix}{connector}[Visits: {root.visits}, Fast reward: {root.fast_reward:.2f}, Reward: {root.reward:.2f}]")
-
-    # Prepare prefix for children
+        node_info = f"{prefix}{connector}[Visits: {root.visits}, Fast reward: {root.fast_reward:.2f}, Reward: {root.reward:.2f}]"
+    
+    # Print to console
+    print(node_info)
+    
+    # Write to file
+    with open(filename, 'a') as f:
+        print(node_info, file=f)
+    
+    # Handle children
     child_prefix = prefix + ("    " if is_last else "│   ")
-
-    # Print children
     if root.children:
         for i, child in enumerate(root.children):
             is_last_child = i == len(root.children) - 1
-            print_mcts(child, child_prefix, is_last_child)
+            print_mcts(child, child_prefix, is_last_child, filename)

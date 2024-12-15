@@ -29,7 +29,8 @@ def run_benchmark(dataset,
                   n_samples: int = None,
                   rollouts: int = 10,
                   depth_limit: int = 5,
-                  action_generation: int = 5) -> Dict:
+                  action_generation: int = 5,
+                  trace_file: str = "mcts_trace.txt") -> Dict:
     """Run MCTS on GSM8K dataset and compute accuracy."""
 
     # Use subset of dataset if specified
@@ -77,8 +78,16 @@ Question 4.2: Now we can answer the question: How far did the car have to travel
 Answer 4.2: The car has driven a total of 23 meters around the ring. It travels 13 meters except for the 3rd turn. So it has to travel 23 - 13 = 10 meters after the 3rd turn. The answer is 10."""
 
     for example in tqdm(dataset):
+
         question = example['question']
         target = float(example['answer'].split('####')[-1].strip())
+
+        # Write question and target to trace file before MCTS
+        with open(trace_file, 'a') as f:
+            print("\n" + "="*50, file=f)
+            print(f"Main Question: {question}", file=f)
+            print(f"Target Answer: {target}", file=f)
+            print("="*50 + "\n", file=f)
 
         # Initialize state with question
         init_state = State(states=[], prefix=prefix, question="Question 5: " + question)
@@ -92,6 +101,7 @@ Answer 4.2: The car has driven a total of 23 meters around the ring. It travels 
                 pred = extract_answer(final_state.states[-1].subanswer)
                 if pred is not None:
                     # Compare prediction with target
+                    print(pred)
                     is_correct = abs(pred - target) < 1e-6
                     correct += int(is_correct)
 
@@ -135,9 +145,9 @@ if __name__ == "__main__":
         transformer_weights=transformer_weights,
         model_params=model_params,
         n_samples=100,  # Set to None to run on full dataset
-        rollouts=5,
-        depth_limit=5,
-        action_generation=5)
+        rollouts=6,
+        depth_limit=6,
+        action_generation=4)
 
     # Save results
     with open('gsm8k_results.json', 'w') as f:

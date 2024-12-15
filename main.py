@@ -156,7 +156,6 @@ def get_action_loglikelihood(prefix: str, actions: list[str], tokenizer: Tokeniz
 
 def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                          model_params: ModelParams) -> Tuple[torch.Tensor, float]:
-    print("confidence_state")
     # Encode action and convert to tensor right away
     action_tokens = torch.tensor(tokenizer.encode(action, bos=True, eos=False, allowed_special="all"), device=device)
 
