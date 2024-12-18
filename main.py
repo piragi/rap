@@ -183,8 +183,6 @@ def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Toke
             answer = ""
         answers.append(answer)
 
-    print(answers)
-
     # Find most common answer
     counter = Counter(answers)
     most_common = counter.most_common(1)[0]
@@ -249,7 +247,6 @@ def get_self_eval(reasoning: Union[str, List[str]], new_subquestion: Union[str, 
     batch_logits = logits[:, -1][:, [yes_token, no_token]]  # Shape: [batch_size, 2]
     probs = torch.softmax(batch_logits, dim=-1)
     yes_probs = probs[:, 0].tolist()  # Yes probability for each sequence
-
     return yes_probs
 
 def prepare_tokens(input_data, tokenizer: Tokenizer):

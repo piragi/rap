@@ -116,6 +116,7 @@ def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: 
     if reward == float('-inf'):
         print("No valid complete path found")
         return None
+    print_reasoning_trace(best_path)
     return best_path[-1].state
 
 def print_mcts(root: MCTSNode, prefix: str = "", is_last: bool = True, filename: str = "mcts_trace.txt"):
@@ -150,3 +151,14 @@ def print_mcts(root: MCTSNode, prefix: str = "", is_last: bool = True, filename:
             is_last_child = i == len(root.children) - 1
             print_mcts(child, child_prefix, is_last_child, filename)
 
+def append_best_path(best_path: list[MCTSNode], filename: str = "mcts_trace.txt"):
+    """Append the best path's questions and answers to the MCTS trace file."""
+    with open(filename, 'a') as f:
+        print("\nBEST PATH:", file=f)
+        print("-" * 20, file=f)
+        for node in best_path[1:]:  # Skip root node
+            if node.state and node.state.states:
+                last_state = node.state.states[-1]
+                print(f"Question: {last_state.subquestion}, Reward: {node.reward:.2f}", file=f)
+                print(f"Answer: {last_state.subanswer}", file=f)
+                print("-" * 20, file=f)

@@ -43,6 +43,7 @@ pip install datasets transformers torch
 echo "Cloning repository..."
 git clone $REPO_URL
 cd $(basename $REPO_URL .git)
+git checkout batched_ops
 
 # Install project-specific requirements if they exist
 if [ -f "requirements.txt" ]; then

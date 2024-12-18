@@ -31,7 +31,7 @@ def prepare_tokens(input_data, tokenizer):
     padded = [t + [tokenizer.pad_id] * (max_len - len(t)) for t in tokens]
     return torch.tensor(padded, device=device)
 
-def advance_tokens(prompt: Union[str, List[str]], tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams):
+def advance_tokens(prompt: List[str], tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams):
     """
     Generate tokens for one or multiple prompts.
     """
@@ -79,7 +79,7 @@ def predict_state(state: State, action: Action, tokenizer: Tokenizer, transforme
     s_t0 += ''.join(f'\nQuestion 5.{i+1}: {substate.subquestion}\nAnswer 5.{i+1}: {substate.subanswer}' for i, substate in enumerate(state.states))
     s_t0 += f'\nQuestion 5.{len(state.states)+1}: {action}\nAnswer 5.{len(state.states)+1}: '
 
-    # Get confident answe
+    # Get confident answer
     confidence_tokens, confidence = get_confidence_state(s_t0, 8, tokenizer, transformer_weights, model_params)
     answer = tokenizer.decode(confidence_tokens[0].tolist())
     print(answer)
