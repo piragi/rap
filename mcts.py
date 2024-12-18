@@ -88,7 +88,8 @@ def get_highest_reward_path(root: MCTSNode) -> tuple[float, list[MCTSNode]]:
     def dfs(path: list[MCTSNode]) -> tuple[float, list[MCTSNode]]:
         current = path[-1]
         if current.is_terminal():
-            return sum(node.reward for node in path[1:]), path
+            path_rewards = [node.reward for node in path[1:]]
+            return (sum(path_rewards) / len(path_rewards), path) if path_rewards else (-math.inf, path)
 
         if current.children is None:
             return float('-inf'), path

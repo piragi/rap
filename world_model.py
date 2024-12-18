@@ -24,13 +24,6 @@ class State(NamedTuple):
     prefix: str
     question: str
 
-def prepare_tokens(input_data, tokenizer):
-    """Helper to prepare tokens for generate function"""
-    tokens = [tokenizer.encode(x, bos=False, eos=False, allowed_special="all") for x in input_data]
-    max_len = max(len(t) for t in tokens)
-    padded = [t + [tokenizer.pad_id] * (max_len - len(t)) for t in tokens]
-    return torch.tensor(padded, device=device)
-
 def advance_tokens(prompt: List[str], tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams):
     """
     Generate tokens for one or multiple prompts.

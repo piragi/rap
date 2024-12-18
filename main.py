@@ -154,43 +154,56 @@ def get_action_loglikelihood(prefix: str, actions: list[str], tokenizer: Tokeniz
         acc_probs += torch.log(probs[torch.arange(bsz), tokens[:, i]]) * valid_tokens
     return acc_probs
 
-def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
-                         model_params: ModelParams) -> Tuple[torch.Tensor, float]:
+def get_confidence_state(action: str, max_samples: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
+                         model_params: ModelParams, batch_size: int = 2) -> Tuple[torch.Tensor, float]:
     """
-    Get confidence state by running multiple generations and finding the most common answer.
+    Get confidence state by adaptively sampling until we find a clear winner.
     """
-
-    prompts = [action] * confidence_iteration
-    batched_tokens = prepare_tokens(prompts, tokenizer)
-    input_length = batched_tokens.size(1)
-    gen_tokens = generate(transformer_weights, model_params, batched_tokens, tokenizer, max_gen_len=input_length + 200)
-
-    # Process all generated sequences
     answers = []
-    for i in range(confidence_iteration):
-        text = tokenizer.decode(gen_tokens[i].tolist())
-        parts = text.split("The answer is")
-        if len(parts) > 1:
-            answer_part = parts[-1]
-            # Look for the first sentence terminator
-            for terminator in ['.', '\n', '!', '?']:
-                if terminator in answer_part:
-                    answer = answer_part.split(terminator)[0].strip()
-                    break
-            else:
-                answer = answer_part.strip()
-        else:
-            answer = ""
-        answers.append(answer)
-
-    # Find most common answer
-    counter = Counter(answers)
-    most_common = counter.most_common(1)[0]
-    most_common_answer, most_common_count = most_common
-    confidence = most_common_count / confidence_iteration
-
-    # Return the first generated sequence that matches the most common answer
-    return gen_tokens[answers.index(most_common_answer)].unsqueeze(0), confidence
+    tokens_map = {}
+    sampled = 0
+    
+    while sampled < max_samples:
+        curr_batch_size = min(batch_size, max_samples - sampled)
+        prompts = [action] * curr_batch_size
+        batched_tokens = prepare_tokens(prompts, tokenizer)
+        input_length = batched_tokens.size(1)
+        gen_tokens = generate(transformer_weights, model_params, batched_tokens, tokenizer, max_gen_len=input_length + 200)
+        
+        for tokens in gen_tokens:
+            text = tokenizer.decode(tokens.tolist())
+            parts = text.split("The answer is")
+            if len(parts) > 1:
+                answer_part = parts[-1]
+                for terminator in ['.', '\n', '!', '?']:
+                    if terminator in answer_part:
+                        answer = answer_part.split(terminator)[0].strip()
+                        break
+                else:
+                    answer = answer_part.strip()
+                if answer:
+                    answers.append(answer)
+                    tokens_map[answer] = tokens
+        
+        sampled += curr_batch_size
+        if not answers:
+            continue
+            
+        counter = Counter(answers)
+        most_common = counter.most_common(2)  # Get top 2 answers
+        
+        if len(most_common) > 0:
+            top_count = most_common[0][1]
+            if (top_count >= 2 and 
+                (len(most_common) == 1 or top_count > most_common[1][1]) and
+                top_count >= len(answers) / 2):
+                break
+    
+    if not answers:
+        return None, 0.0
+    most_common_answer, count = counter.most_common(1)[0]
+    confidence = count / len(answers)
+    return tokens_map[most_common_answer].unsqueeze(0), confidence
 
 def get_self_eval(reasoning: Union[str, List[str]], new_subquestion: Union[str, List[str]], tokenizer: Tokenizer,
                   transformer_weights: TransformerWeights, model_params: ModelParams) -> List[float]:
