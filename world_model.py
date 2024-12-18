@@ -47,9 +47,12 @@ def advance_tokens(prompt: List[str], tokenizer: Tokenizer, transformer_weights:
         text = tokenizer.decode(seq.tolist())
         if '\n' in text:
             text = text.split('\n')[0]
+        if '.\n' in text:
+            text = text.split('.\n')[0]
+        if '\n\n' in text:
+            text = text.split('\n\n')[0]
         final_texts.append(text)
 
-    print(final_texts)
     return final_texts
 
 def predict_action(state: State, tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams,
@@ -82,7 +85,12 @@ def predict_state(state: State, action: Action, tokenizer: Tokenizer, transforme
     # Get confident answer
     confidence_tokens, confidence = get_confidence_state(s_t0, 8, tokenizer, transformer_weights, model_params)
     answer = tokenizer.decode(confidence_tokens[0].tolist())
-    print(answer)
+    if '\n' in answer:
+        answer = answer.split('\n')[0]
+    if '.\n' in answer:
+        answer = answer.split('.\n')[0]
+    if '\n\n' in answer:
+        answer = answer.split('\n\n')[0]
 
     # Create new state
     return State(states=[*state.states, SubStep(subquestion=action, subanswer=answer.strip(), confidence=confidence)],

@@ -24,7 +24,7 @@ class MCTSNode:
     def is_terminal(self) -> bool:
         if self.state is not None and self.state.states:
             last_question = self.state.states[-1].subquestion.strip()
-            if last_question.startswith("Now we can answer the question:"):
+            if "Now we can answer the question:" in last_question:
                 return True
         return False
 
@@ -116,7 +116,7 @@ def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: 
     if reward == float('-inf'):
         print("No valid complete path found")
         return None
-    print_reasoning_trace(best_path)
+    append_best_path(best_path)
     return best_path[-1].state
 
 def print_mcts(root: MCTSNode, prefix: str = "", is_last: bool = True, filename: str = "mcts_trace.txt"):

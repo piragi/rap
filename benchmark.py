@@ -1,12 +1,13 @@
 import json
 import os
 from typing import Dict
+import torch
 
 from datasets import load_dataset
 from tqdm import tqdm
 
 from config import ModelParams
-from main import Tokenizer, load_model_params, load_weights
+from main import Tokenizer, load_model_params, load_weights, generate
 from mcts import mcts
 from world_model import State
 
@@ -126,10 +127,104 @@ Answer 4.2: The car has driven a total of 23 meters around the ring. It travels 
 
     return {'accuracy': accuracy, 'correct': correct, 'total': total, 'results': results}
 
+def run_cot_benchmark(dataset,
+                     tokenizer: Tokenizer,
+                     transformer_weights: dict,
+                     model_params: ModelParams,
+                     n_samples: int = None,
+                     trace_file: str = "cot_trace.txt") -> Dict:
+    prefix = """Q: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?\nA: Natalia sold 48 clips in April and half as many clips in May, so she sold 48 / 2 = 24 clips in May. Altogether, she sold 48 + 24 = 72 clips. The answer is 72.\n\n
+Q: Weng earns $12 an hour for babysitting. Yesterday, she just did 50 minutes of babysitting. How much did she earn?\nA: Since Weng earns $12 an hour for babysitting, she earns $12 / 60 = $0.2 per minute. Working 50 minutes, she earned $0.2 x 50 = $10. The answer is 10.\n\n
+Q: Betty is saving money for a new wallet which costs $100. Betty has only half of the money she needs. Her parents decided to give her $15 for that purpose, and her grandparents twice as much as her parents. How much more money does Betty need to buy the wallet?\nA: In the beginning, Betty has only half of the money she needs, which is 100 / 2 = $50. Her grandparents gave her twice as much as her parents, so they gave her 15 * 2 = $30. Now that she got $15 from her parents and $30 from her grandparents, she will need $100 - $15 - $30 = $55. Since she already has $50, she needs $55 - $50 = $5 more. The answer is 5.\n\n
+Q: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages and today, she read twice as many pages as yesterday. If she wants to read half of the remaining pages tomorrow, how many pages should she read?\nA: Julie read twice as many pages as yesterday, so she read 12 * 2 = 24 pages today. Since yesterday, Julie read 12 + 24 = 36 pages. So, there are 120 - 36 = 84 pages left to be read. Since she wants to read half of the remaining pages, she should read 84 / 2 = 42 pages. The answer is 42.\n\n"""
+
+    # Use subset of dataset if specified
+    if n_samples:
+        dataset = dataset.select(range(n_samples))
+
+    correct = 0
+    total = 0
+    results = []
+
+    for example in tqdm(dataset):
+        question = example['question']
+        target = float(example['answer'].split('####')[-1].strip())
+
+        # Write question and target to trace file
+        with open(trace_file, 'a') as f:
+            print("\n" + "=" * 50, file=f)
+            print(f"Question: {question}", file=f)
+            print(f"Target Answer: {target}", file=f)
+            print("=" * 50 + "\n", file=f)
+
+        prompt = prefix + question + "\nA: "
+        
+        try:
+            # Generate response using the model
+            tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")
+            tokens = torch.tensor([tokens]).cuda()
+            
+            output_tokens = generate(
+                transformer_weights,
+                model_params,
+                tokens,
+                tokenizer,
+                temperature=0.9,
+                max_gen_len=512
+            )
+            
+            response = tokenizer.decode(output_tokens[0].tolist())
+            reasoning = response.split(prompt)[-1].strip()
+
+            # Extract predicted answer
+            pred = extract_answer(reasoning)
+            
+            if pred is not None:
+                # Compare prediction with target
+                is_correct = abs(pred - target) < 1e-6
+                correct += int(is_correct)
+                
+                results.append({
+                    'question': question,
+                    'target': target,
+                    'predicted': pred,
+                    'correct': is_correct,
+                    'steps': [reasoning]  # Keep full reasoning chain for comparison
+                })
+
+                # Write trace to file
+                with open(trace_file, 'a') as f:
+                    print(f"Model reasoning:\n{reasoning}\n", file=f)
+                    print(f"Predicted: {pred}", file=f)
+                    print(f"Correct: {is_correct}\n", file=f)
+
+        except Exception as e:
+            print(f"Error processing question: {question}")
+            print(f"Error: {str(e)}")
+            continue
+
+        total += 1
+        print(f"\nRunning accuracy: {correct/total:.2%} ({correct}/{total})")
+
+    accuracy = correct / total if total > 0 else 0
+
+    return {
+        'accuracy': accuracy,
+        'correct': correct,
+        'total': total,
+        'results': results
+    }
+
+
 if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 2 or sys.argv[1] not in ['cot', 'rap']:
+        print("Usage: python3 benchmark.py [cot|rap]")
+        sys.exit(1)
+
     # Load model components
     home_dir = os.path.expanduser("~")
-    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B")
+    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B-Instruct")
     model_params = load_model_params(os.path.join(model_path, "params.json"))
     transformer_weights = load_weights(os.path.join(model_path, "consolidated.00.pth"))
     tokenizer = Tokenizer(model_path=os.path.join(model_path, "tokenizer.model"))
@@ -138,19 +233,30 @@ if __name__ == "__main__":
     dataset = load_dataset("openai/gsm8k", "main")
     test_dataset = dataset['test']
 
-    # Run benchmark
-    results = run_benchmark(
-        dataset=test_dataset,
-        tokenizer=tokenizer,
-        transformer_weights=transformer_weights,
-        model_params=model_params,
-        n_samples=1,  # Set to None to run on full dataset
-        rollouts=2,
-        depth_limit=2,
-        action_generation=2)
+    if sys.argv[1] == 'cot':
+        print("Running Chain of Thought benchmark...")
+        results = run_cot_benchmark(
+            dataset=test_dataset,
+            tokenizer=tokenizer,
+            transformer_weights=transformer_weights,
+            model_params=model_params,
+            n_samples=100)
+        output_file = 'gsm8k_cot_results.json'
+    else:  # rap
+        print("Running Reasoning via Planning (RAP) benchmark...")
+        results = run_benchmark(
+            dataset=test_dataset,
+            tokenizer=tokenizer,
+            transformer_weights=transformer_weights,
+            model_params=model_params,
+            n_samples=100,
+            rollouts=6,
+            depth_limit=6,
+            action_generation=4)
+        output_file = 'gsm8k_rap_results.json'
 
     # Save results
-    with open('gsm8k_results.json', 'w') as f:
+    with open(output_file, 'w') as f:
         json.dump(results, f, indent=2)
 
     print(f"\nFinal accuracy: {results['accuracy']:.2%}")

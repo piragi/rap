@@ -194,59 +194,45 @@ def get_confidence_state(action: str, confidence_iteration: int, tokenizer: Toke
 
 def get_self_eval(reasoning: Union[str, List[str]], new_subquestion: Union[str, List[str]], tokenizer: Tokenizer,
                   transformer_weights: TransformerWeights, model_params: ModelParams) -> List[float]:
-    """
-    Evaluate usefulness of subquestions in batch.
-    
-    Args:
-        reasoning: Single reasoning string or list of reasoning strings
-        new_subquestion: Single question or list of questions to evaluate
+    yes_probs = []
+    for r, q in zip(reasoning, new_subquestion):
+        prompt = f"{USEFUL_PREFIX}{r}{q}\nIs the new question useful? "
+        tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")], 
+                            dtype=torch.long, device=device)
         
-    Returns:
-        If inputs are strings: returns single confidence float
-        If inputs are lists: returns list of confidence floats
-    """
-    prompts = [f"{USEFUL_PREFIX}{r}{q}\nIs the new question useful? " for r, q in zip(reasoning, new_subquestion)]
+        seqlen = tokens.shape[1]
+        attn_mask = build_attn_mask(seqlen, 0)
+        freqs_cis = precompute_freqs_cis(
+            model_params.head_dim,
+            model_params.max_seq_len,
+            model_params.rope_theta,
+            model_params.use_scaled_rope,
+        )
+        kvcache = KVCache(
+            model_params.n_layers,
+            1,
+            model_params.max_seq_len,
+            model_params.n_local_kv_heads,
+            model_params.head_dim,
+        ).to(device)
 
-    # Encode all prompts
-    tokens_list = [tokenizer.encode(p, bos=False, eos=False, allowed_special="all") for p in prompts]
-    # Pad to max length
-    max_len = max(len(t) for t in tokens_list)
-    padded_tokens = [t + [tokenizer.pad_id] * (max_len - len(t)) for t in tokens_list]
-    tokens = torch.tensor(padded_tokens, dtype=torch.long, device=device)
+        logits, _, _ = transformer(
+            transformer_weights,
+            model_params,
+            tokens,
+            0,
+            kvcache,
+            freqs_cis[:seqlen],
+            attention_mask=attn_mask,
+        )
 
-    bsz, seqlen = tokens.shape
-    attn_mask = build_attn_mask(seqlen, 0)
-    freqs_cis = precompute_freqs_cis(
-        model_params.head_dim,
-        model_params.max_seq_len,
-        model_params.rope_theta,
-        model_params.use_scaled_rope,
-    )
-    kvcache = KVCache(
-        model_params.n_layers,
-        bsz,
-        model_params.max_seq_len,
-        model_params.n_local_kv_heads,
-        model_params.head_dim,
-    ).to(device)
+        yes_token = tokenizer.encode("Yes", bos=False, eos=False, allowed_special="all")[0]
+        no_token = tokenizer.encode("No", bos=False, eos=False, allowed_special="all")[0] 
+        
+        batch_logits = logits[:, -1][:, [yes_token, no_token]]
+        probs = torch.softmax(batch_logits, dim=-1)
+        yes_probs.append(probs[0, 0].item())
 
-    logits, kvcache, _ = transformer(
-        transformer_weights,
-        model_params,
-        tokens,
-        0,
-        kvcache,
-        freqs_cis[:seqlen],
-        attention_mask=attn_mask,
-    )
-
-    yes_token = tokenizer.encode("Yes", bos=False, eos=False, allowed_special="all")[0]
-    no_token = tokenizer.encode("No", bos=False, eos=False, allowed_special="all")[0]
-
-    # Get probabilities for Yes/No for all sequences
-    batch_logits = logits[:, -1][:, [yes_token, no_token]]  # Shape: [batch_size, 2]
-    probs = torch.softmax(batch_logits, dim=-1)
-    yes_probs = probs[:, 0].tolist()  # Yes probability for each sequence
     return yes_probs
 
 def prepare_tokens(input_data, tokenizer: Tokenizer):
