@@ -3,7 +3,7 @@ set -e  # Exit on any error
 
 # Configuration - replace these values
 REPO_URL="https://github.com/piragi/rap.git"
-META_URL="https://llama3-2-lightweight.llamameta.net/*?Policy=eyJTdGF0ZW1lbnQiOlt7InVuaXF1ZV9oYXNoIjoiMHp3azd2bGM2a3oyMWVkMjdmdThxemY4IiwiUmVzb3VyY2UiOiJodHRwczpcL1wvbGxhbWEzLTItbGlnaHR3ZWlnaHQubGxhbWFtZXRhLm5ldFwvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTczNDQ0OTU0MX19fV19&Signature=kVqS9QpY4hSWki4K-zKTz6auwutUIQ0Nr6gVUGUcwbzMywA8JiYF%7E3WHEXAJvRAbWv6oVuY9HD7O%7E4A9NuOTfYfzZgf0NrhYENa0loz0noE3%7EdIsGT7x5f1COd9inbrLCp0CmeDya%7EbdVGF4qv6tsOBFLL3vdKpQVGITHbo9FMvle38zftENynnLH5WIW0WuCAMC%7Ei5z-QbSjPqqvPWnnwu%7EmxIq494tL-icKkVa5IrXortes6bcY7P6A%7EDiV0zAMRcQBuwrG4swaWwcOJa7fW7STadfWy9B4QceV-5lyu8bynfe0tM3TCl3PeyVSHTIu7ObSX%7EEV7w72Wvo2tP0%7Ew__&Key-Pair-Id=K15QRJLYKIFSLZ&Download-Request-ID=1718496768722423"  # The temporary URL from Meta
+META_URL="https://llama3-2-lightweight.llamameta.net/*?Policy=eyJTdGF0ZW1lbnQiOlt7InVuaXF1ZV9oYXNoIjoianZyc3pkaW9zaXJ5anpyZHB2NHFiNGkyIiwiUmVzb3VyY2UiOiJodHRwczpcL1wvbGxhbWEzLTItbGlnaHR3ZWlnaHQubGxhbWFtZXRhLm5ldFwvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTczNjUzMzQ0OH19fV19&Signature=plrv8cYZHMbatxrkyJeI8uzegKVBj6RvixOgxQidtlrr6kKpZj7zxhwFCmTk04PlmMgGZOHAwFQuTUsnPZ0YsE2hgQjLa4rc2Dv9ACagvgNpbhmSnLBE9bqj3452a6V-weNKSqdfsyGGiYn1rkqsbrsHr6N1cCUBf-OMMdRb4b3D%7EcKkbVM8dwsmUo2bmNJSYWHTYsli3Z8tkedEgkCti5XI9NbIN5EOcP1dYTRXVFJPoiboEAeuQfi2sbx2RX66UsuG1-Wtg3p9QG5X0vXKsl5yNe6-4ncDxpHvN5UKTmEDlbDGxldfvfrJGzthtMYLMnJl4YIwjttsax260IcKbw__&Key-Pair-Id=K15QRJLYKIFSLZ&Download-Request-ID=954820303247478"  # The temporary URL from Meta
 ENV_NAME="llama_env"  # Name of the virtual environment
 
 echo "Starting setup process..."
@@ -39,12 +39,6 @@ echo "Installing Python packages..."
 pip install llama-stack
 pip install datasets transformers torch
 
-# Clone repository
-echo "Cloning repository..."
-git clone $REPO_URL
-cd $(basename $REPO_URL .git)
-git checkout batched_ops
-
 # Install project-specific requirements if they exist
 if [ -f "requirements.txt" ]; then
 echo "Installing project requirements..."
@@ -57,7 +51,7 @@ if [ -z "$META_URL" ]; then
 echo "Error: META_URL environment variable not set"
 exit 1
 fi
-llama model download --source meta --model-id Llama3.2-3B --meta-url "$META_URL"
+llama model download --source meta --model-id Llama3.2-3B-Instruct --meta-url "$META_URL"
 
 # Verify the model files exist
 echo "Verifying model files..."

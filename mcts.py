@@ -49,11 +49,20 @@ def select_node(node: MCTSNode, child_select="max") -> list[MCTSNode]:
         path.append(node)
         if node.children is None or len(node.children) == 0 or node.is_terminal():
             return path
+
         if child_select == 'max':
-            node = max(node.children, key=lambda child: child.max_reward + W_EXP * np.sqrt(np.log(node.visits) / max(1, child.visits)))
+            # Use different selection strategy based on whether node is visited
+            node = max(node.children, key=lambda child: 
+                  # For unvisited nodes, use fast_reward directly
+                  (child.fast_reward + W_EXP * np.sqrt(np.log(node.visits))) if child.visits == 0
+                  # For visited nodes, use standard UCT with max_reward
+                  else (child.max_reward + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
         
         if child_select == 'mean':
-            node = max(node.children, key=lambda child: child.q_value + W_EXP * np.sqrt(np.log(node.visits) / max(1, child.visits)))
+            node = max(node.children, key=lambda child: 
+                  # Same pattern for mean selection
+                  (child.fast_reward + W_EXP * np.sqrt(np.log(node.visits))) if child.visits == 0
+                  else (child.q_value + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
 
 def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                model_params: ModelParams) -> list[MCTSNode]:

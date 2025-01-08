@@ -155,7 +155,7 @@ def get_action_loglikelihood(prefix: str, actions: list[str], tokenizer: Tokeniz
     return acc_probs
 
 def get_confidence_state(action: str, max_samples: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
-                         model_params: ModelParams, batch_size: int = 1) -> Tuple[torch.Tensor, float]:
+                         model_params: ModelParams, batch_size: int = 2) -> Tuple[torch.Tensor, float]:
     """
     Get confidence state by adaptively sampling until we find a clear winner.
     """
@@ -268,7 +268,7 @@ def generate(
     model_params: ModelParams,
     tokens: torch.Tensor,
     tokenizer: Tokenizer,
-    temperature: float = 0.8,
+    temperature: float = 0.9,
     top_p: float = 0.90,
     max_gen_len: int = 200,
 ) -> torch.Tensor:
