@@ -1,15 +1,16 @@
 import json
 import os
 from typing import Dict
-import torch
 
+import torch
 from datasets import load_dataset
 from tqdm import tqdm
 
 from config import ModelParams
-from main import Tokenizer, load_model_params, load_weights, generate
+from main import Tokenizer, generate, load_model_params, load_weights
 from mcts import mcts
 from world_model import State
+
 
 def extract_answer(answer_text: str) -> float:
     """Extract numerical answer from the text."""

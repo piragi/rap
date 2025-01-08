@@ -1,4 +1,5 @@
 import math
+import random
 from typing import Optional
 
 import numpy as np
@@ -20,6 +21,7 @@ class MCTSNode:
         self.fast_reward = fast_reward
         self.children: list[MCTSNode] = []
         self.cum_rewards: list[list[float]] = []
+        self.max_reward = float('-inf')
 
     def is_terminal(self) -> bool:
         if self.state is not None and self.state.states:
@@ -40,14 +42,18 @@ def calculate_reward(self_eval: float, confidence: float, alpha: float = 0.5) ->
     """Calculate reward using weighted geometric mean"""
     return math.pow(self_eval, alpha) * math.pow(confidence, 1 - alpha)
 
-def select_node(node: MCTSNode) -> list[MCTSNode]:
+def select_node(node: MCTSNode, child_select="max") -> list[MCTSNode]:
     path = []
     while True:
         node.visits += 1
         path.append(node)
         if node.children is None or len(node.children) == 0 or node.is_terminal():
             return path
-        node = max(node.children, key=lambda child: child.q_value + W_EXP * np.sqrt(np.log(node.visits) / max(1, child.visits)))
+        if child_select == 'max':
+            node = max(node.children, key=lambda child: child.max_reward + W_EXP * np.sqrt(np.log(node.visits) / max(1, child.visits)))
+        
+        if child_select == 'mean':
+            node = max(node.children, key=lambda child: child.q_value + W_EXP * np.sqrt(np.log(node.visits) / max(1, child.visits)))
 
 def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                model_params: ModelParams) -> list[MCTSNode]:
@@ -69,7 +75,9 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
             for action, fast_reward in actions_with_rewards:
                 current_node.children.append(MCTSNode(state=None, action=action, parent=current_node, reward=0., fast_reward=fast_reward))
 
-        current_node = max(current_node.children, key=lambda child: child.fast_reward)
+        # greedy selection vs random selection of children in simulation
+        # current_node = max(current_node.children, key=lambda child: child.fast_reward)
+        current_node = random.choice(current_node.children)
         path.append(current_node)
     return path
 
@@ -79,6 +87,16 @@ def backpropagation(path: list[MCTSNode]) -> float:
         future_rewards = [n.reward for n in path[len(path) - i - 1:]]
         node.cum_rewards.append(future_rewards)
     return sum(node.reward for node in path)
+
+def backpropagation_max(path: list[MCTSNode]) -> float:
+    reward = 0
+    for node in reversed(path):
+        reward = reward + node.reward
+        position_from_end = len(path) - path.index(node)
+        mean_reward = reward / position_from_end
+        node.max_reward = max(node.max_reward, mean_reward)
+    return reward
+
 
 def get_highest_reward_path(root: MCTSNode) -> tuple[float, list[MCTSNode]]:
     """
@@ -102,6 +120,25 @@ def get_highest_reward_path(root: MCTSNode) -> tuple[float, list[MCTSNode]]:
 
     return dfs([root])
 
+
+def get_highest_reward_path_max(root: MCTSNode) -> tuple[float, list[MCTSNode]]:
+    """Find path with highest reward through DFS."""
+    def dfs(path: list[MCTSNode]) -> tuple[float, list[MCTSNode]]:
+        current = path[-1]
+        if current.is_terminal():
+            return current.max_reward, path
+
+        if current.children is None:
+            return float('-inf'), path
+
+        visited_children = [c for c in current.children if c.state is not None]
+        if not visited_children:
+            return float('-inf'), path
+
+        return max((dfs(path + [child]) for child in visited_children), key=lambda x: x[0])
+
+    return dfs([root])
+
 def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
          model_params: ModelParams) -> State:
     root = MCTSNode(init_state, init_state.question, None, 0., 0.)
@@ -110,9 +147,9 @@ def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: 
         last_node = path[-1]
         simulation_path = simulation(last_node, depth_limit - len(path), action_generation, tokenizer, transformer_weights, model_params)
         path.extend(simulation_path)
-        backpropagation(path)
+        backpropagation_max(path)
 
-    reward, best_path = get_highest_reward_path(root)
+    reward, best_path = get_highest_reward_path_max(root)
     print_mcts(root)
     if reward == float('-inf'):
         print("No valid complete path found")
