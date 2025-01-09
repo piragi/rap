@@ -28,7 +28,7 @@ def run_benchmark(dataset,
                   tokenizer: Tokenizer,
                   transformer_weights: dict,
                   model_params: ModelParams,
-                  n_samples: int = 0,
+                  n_samples: int = None,
                   rollouts: int = 10,
                   depth_limit: int = 5,
                   action_generation: int = 5,
@@ -37,11 +37,11 @@ def run_benchmark(dataset,
     """Run MCTS on GSM8K dataset and compute accuracy."""
 
     # Use subset of dataset if specified
-    if n_samples:
+    if n_samples > 0:  # Changed condition to check if n_samples is positive
         end_idx = min(start_idx + n_samples, len(dataset))
-        dataset = dataset.select(range(start_idx, end_idx))
     else:
-        dataset = dataset.select(range(start_idx, len(dataset)))
+        end_idx = len(dataset)
+    dataset = dataset.select(range(start_idx, end_idx))
 
     correct = 0
     total = 0
