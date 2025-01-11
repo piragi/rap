@@ -114,8 +114,23 @@ def run_cot_benchmark(dataset,
                      transformer_weights: dict,
                      model_params: ModelParams,
                      n_samples: int = None,
+                     max_iterations: int = 10,
                      trace_file: str = "cot_trace.txt",
-                     start_idx: int = 0) -> Dict:  # Added start_idx parameter
+                     start_idx: int = 0) -> Dict:
+    """
+    Run chain of thought benchmark with multiple attempts per question
+    Args:
+        dataset: The dataset to evaluate on
+        tokenizer: Tokenizer instance
+        transformer_weights: Model weights
+        model_params: Model parameters
+        n_samples: Number of samples to evaluate (optional)
+        max_iterations: Maximum number of attempts per question (default: 10)
+        trace_file: File to write traces to
+        start_idx: Starting index in dataset
+    Returns:
+        Dict containing accuracy and detailed results
+    """
     prefix = """Q: Natalia sold clips..."""  # Your existing prefix
 
     # Use subset of dataset if specified
@@ -144,59 +159,85 @@ def run_cot_benchmark(dataset,
             # Write question and target to trace file
             with open(trace_file, 'a') as f:
                 print("\n" + "=" * 50, file=f)
-                print(f"Index: {idx}", file=f)  # Added index logging
+                print(f"Index: {idx}", file=f)
                 print(f"Question: {question}", file=f)
                 print(f"Target Answer: {target}", file=f)
                 print("=" * 50 + "\n", file=f)
 
             prompt = prefix + question + "\nA: "
             
-            try:
-                # Generate response using the model
-                tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")
-                tokens = torch.tensor([tokens]).cuda()
+            # Initialize variables for multiple attempts
+            is_correct = False
+            attempts = 0
+            all_attempts = []
+            
+            while not is_correct and attempts < max_iterations:
+                attempts += 1
                 
-                output_tokens = generate(
-                    transformer_weights,
-                    model_params,
-                    tokens,
-                    tokenizer,
-                    temperature=0.9,
-                    max_gen_len=512
-                )
-                
-                response = tokenizer.decode(output_tokens[0].tolist())
-                reasoning = response.split(prompt)[-1].strip()
-
-                # Extract predicted answer
-                pred = extract_answer(reasoning)
-                
-                if pred is not None:
-                    # Compare prediction with target
-                    is_correct = abs(pred - target) < 1e-6
-                    correct += int(is_correct)
+                try:
+                    # Generate response using the model
+                    tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")
+                    tokens = torch.tensor([tokens]).cuda()
                     
-                    results.append({
-                        'index': idx,  # Added index to results
-                        'question': question,
-                        'target': target,
-                        'predicted': pred,
-                        'correct': is_correct,
-                        'steps': [reasoning]
+                    output_tokens = generate(
+                        transformer_weights,
+                        model_params,
+                        tokens,
+                        tokenizer,
+                        temperature=0.9,
+                        max_gen_len=512
+                    )
+                    
+                    response = tokenizer.decode(output_tokens[0].tolist())
+                    reasoning = response.split(prompt)[-1].strip()
+
+                    # Extract predicted answer
+                    pred = extract_answer(reasoning)
+                    
+                    if pred is not None:
+                        # Compare prediction with target
+                        is_correct = abs(pred - target) < 1e-6
+                        
+                        attempt_result = {
+                            'attempt_number': attempts,
+                            'reasoning': reasoning,
+                            'predicted': pred,
+                            'correct': is_correct
+                        }
+                        all_attempts.append(attempt_result)
+
+                        # Write trace to file
+                        with open(trace_file, 'a') as f:
+                            print(f"Attempt {attempts}:", file=f)
+                            print(f"Model reasoning:\n{reasoning}\n", file=f)
+                            print(f"Predicted: {pred}", file=f)
+                            print(f"Correct: {is_correct}\n", file=f)
+
+                        if is_correct:
+                            correct += 1
+                            break
+
+                except Exception as e:
+                    print(f"\nError in model generation at index {idx}, attempt {attempts}: {str(e)}")
+                    all_attempts.append({
+                        'attempt_number': attempts,
+                        'error': str(e)
                     })
-
-                    # Write trace to file
-                    with open(trace_file, 'a') as f:
-                        print(f"Model reasoning:\n{reasoning}\n", file=f)
-                        print(f"Predicted: {pred}", file=f)
-                        print(f"Correct: {is_correct}\n", file=f)
-
-            except Exception as e:
-                print(f"\nError in model generation at index {idx}: {str(e)}")
-                continue
+                    continue
 
             total += 1
+            
+            results.append({
+                'index': idx,
+                'question': question,
+                'target': target,
+                'attempts': all_attempts,
+                'total_attempts': attempts,
+                'final_correct': is_correct
+            })
+
             print(f"\nQuestion {idx} - Running accuracy: {correct/total:.2%} ({correct}/{total})")
+            print(f"Required {attempts} attempts, Success: {is_correct}")
 
         except Exception as e:
             print(f"\nUnexpected error at index {idx}: {str(e)}")
@@ -234,27 +275,30 @@ if __name__ == "__main__":
 
     if sys.argv[1] == 'cot':
         print(f"Running Chain of Thought benchmark starting from index {start_idx}...")
+        max_iterations = 6
         results = run_cot_benchmark(
             dataset=test_dataset,
             tokenizer=tokenizer,
             transformer_weights=transformer_weights,
+            max_iterations=max_iterations,
             model_params=model_params,
             n_samples=100,
             start_idx=start_idx)
-        output_file = f'gsm8k_cot_results_{start_idx}.json'
+        output_file = f'gsm8k_cot_results_start:{start_idx}_iterations:{max_iterations}.json'
     else:  # rap
         print(f"Running Reasoning via Planning (RAP) benchmark starting from index {start_idx}...")
+        rollouts = 1
         results = run_benchmark(
             dataset=test_dataset,
             tokenizer=tokenizer,
             transformer_weights=transformer_weights,
             model_params=model_params,
             n_samples=100,
-            rollouts=6,
+            rollouts=rollouts,
             depth_limit=6,
             action_generation=4,
             start_idx=start_idx)
-        output_file = f'gsm8k_rap_results_{start_idx}.json'
+        output_file = f'gsm8k_rap_results_start:{start_idx}_rollouts:{rollouts}.json'
 
     # Save results
     with open(output_file, 'w') as f:
