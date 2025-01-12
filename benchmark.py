@@ -11,7 +11,6 @@ from main import Tokenizer, generate, load_model_params, load_weights
 from mcts import mcts
 from world_model import State
 
-
 def extract_answer(answer_text: str) -> float:
     """Extract numerical answer from the text."""
     try:
@@ -144,13 +143,13 @@ Answer 4.2: The car has driven a total of 23 meters around the ring. It travels 
     return {'accuracy': accuracy, 'correct': correct, 'total': total, 'results': results, 'last_index': idx}
 
 def run_cot_benchmark(dataset,
-                     tokenizer: Tokenizer,
-                     transformer_weights: dict,
-                     model_params: ModelParams,
-                     n_samples: int = None,
-                     max_iterations: int = 10,
-                     trace_file: str = "cot_trace.txt",
-                     start_idx: int = 0) -> Dict:
+                      tokenizer: Tokenizer,
+                      transformer_weights: dict,
+                      model_params: ModelParams,
+                      n_samples: int = None,
+                      max_iterations: int = 10,
+                      trace_file: str = "cot_trace.txt",
+                      start_idx: int = 0) -> Dict:
     """
     Run chain of thought benchmark with multiple attempts per question
     Args:
@@ -201,36 +200,29 @@ Q: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages an
                 print("=" * 50 + "\n", file=f)
 
             prompt = prefix + question + "\nA: "
-            
+
             # Initialize variables for collecting predictions
             predictions = []
             all_attempts = []
-            
+
             # Make all attempts regardless of correctness
             for attempt in range(max_iterations):
                 try:
                     # Generate response using the model
                     tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")
                     tokens = torch.tensor([tokens]).cuda()
-                    
-                    output_tokens = generate(
-                        transformer_weights,
-                        model_params,
-                        tokens,
-                        tokenizer,
-                        temperature=0.8,
-                        max_gen_len=512
-                    )
-                    
+
+                    output_tokens = generate(transformer_weights, model_params, tokens, tokenizer, temperature=0.8, max_gen_len=512)
+
                     response = tokenizer.decode(output_tokens[0].tolist())
                     reasoning = response.split(prompt)[-1].strip()
 
                     # Extract predicted answer
                     pred = extract_answer(reasoning)
-                    
+
                     if pred is not None:
                         predictions.append(pred)
-                        
+
                         attempt_result = {
                             'attempt_number': attempt + 1,
                             'reasoning': reasoning,
@@ -246,10 +238,7 @@ Q: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages an
 
                 except Exception as e:
                     print(f"\nError in model generation at index {idx}, attempt {attempt + 1}: {str(e)}")
-                    all_attempts.append({
-                        'attempt_number': attempt + 1,
-                        'error': str(e)
-                    })
+                    all_attempts.append({'attempt_number': attempt + 1, 'error': str(e)})
                     continue
 
             # Determine majority vote if we have any valid predictions
@@ -257,7 +246,7 @@ Q: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages an
                 from collections import Counter
                 prediction_counts = Counter(predictions)
                 majority_pred = prediction_counts.most_common(1)[0][0]
-                
+
                 # Check if majority prediction is correct
                 is_correct = abs(majority_pred - target) < 1e-6
                 if is_correct:
@@ -275,7 +264,7 @@ Q: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages an
                 majority_pred = None
 
             total += 1
-            
+
             results.append({
                 'index': idx,
                 'question': question,
@@ -296,13 +285,7 @@ Q: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages an
 
     accuracy = correct / total if total > 0 else 0
 
-    return {
-        'accuracy': accuracy,
-        'correct': correct,
-        'total': total,
-        'results': results,
-        'last_index': idx
-    }
+    return {'accuracy': accuracy, 'correct': correct, 'total': total, 'results': results, 'last_index': idx}
 
 if __name__ == "__main__":
     import sys
@@ -315,7 +298,7 @@ if __name__ == "__main__":
 
     # Load model components
     home_dir = os.path.expanduser("~")
-    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B")
+    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B-Instruct")
     model_params = load_model_params(os.path.join(model_path, "params.json"))
     transformer_weights = load_weights(os.path.join(model_path, "consolidated.00.pth"))
     tokenizer = Tokenizer(model_path=os.path.join(model_path, "tokenizer.model"))
@@ -326,29 +309,27 @@ if __name__ == "__main__":
 
     if sys.argv[1] == 'cot':
         print(f"Running Chain of Thought benchmark starting from index {start_idx}...")
-        max_iterations = 6
-        results = run_cot_benchmark(
-            dataset=test_dataset,
-            tokenizer=tokenizer,
-            transformer_weights=transformer_weights,
-            max_iterations=max_iterations,
-            model_params=model_params,
-            n_samples=100,
-            start_idx=start_idx)
+        max_iterations = 3
+        results = run_cot_benchmark(dataset=test_dataset,
+                                    tokenizer=tokenizer,
+                                    transformer_weights=transformer_weights,
+                                    max_iterations=max_iterations,
+                                    model_params=model_params,
+                                    n_samples=100,
+                                    start_idx=start_idx)
         output_file = f'gsm8k_cot_results_start:{start_idx}_iterations:{max_iterations}.json'
     else:  # rap
         print(f"Running Reasoning via Planning (RAP) benchmark starting from index {start_idx}...")
-        rollouts = 1
-        results = run_benchmark(
-            dataset=test_dataset,
-            tokenizer=tokenizer,
-            transformer_weights=transformer_weights,
-            model_params=model_params,
-            n_samples=100,
-            rollouts=rollouts,
-            depth_limit=6,
-            action_generation=4,
-            start_idx=start_idx)
+        rollouts = 3
+        results = run_benchmark(dataset=test_dataset,
+                                tokenizer=tokenizer,
+                                transformer_weights=transformer_weights,
+                                model_params=model_params,
+                                n_samples=100,
+                                rollouts=rollouts,
+                                depth_limit=6,
+                                action_generation=4,
+                                start_idx=start_idx)
         output_file = f'gsm8k_rap_results_start:{start_idx}_rollouts:{rollouts}.json'
 
     # Save results

@@ -45,36 +45,40 @@ def calculate_reward(self_eval: float, confidence: float, alpha: float = 0.5) ->
 def select_node(node: MCTSNode, child_select="max") -> list[MCTSNode]:
     path = []
     while True:
-        node.visits += 1
         path.append(node)
         if node.children is None or len(node.children) == 0 or node.is_terminal():
             return path
 
         if child_select == 'max':
             # Use different selection strategy based on whether node is visited
-            node = max(node.children, key=lambda child: 
-                  # For unvisited nodes, use fast_reward directly
-                  (child.fast_reward + W_EXP * np.sqrt(np.log(node.visits))) if child.visits == 0
-                  # For visited nodes, use standard UCT with max_reward
-                  else (child.max_reward + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
-        
+            node = max(
+                node.children,
+                key=lambda child:
+                # For unvisited nodes, use fast_reward directly
+                (child.fast_reward + W_EXP * np.sqrt(np.log(1))) if child.visits == 0
+                # For visited nodes, use standard UCT with max_reward
+                else (child.max_reward + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
+
         if child_select == 'mean':
-            node = max(node.children, key=lambda child: 
-                  # Same pattern for mean selection
-                  (child.fast_reward + W_EXP * np.sqrt(np.log(node.visits))) if child.visits == 0
-                  else (child.q_value + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
+            node = max(
+                node.children,
+                key=lambda child:
+                # Same pattern for mean selection
+                (child.fast_reward + W_EXP * np.sqrt(np.log(1)))
+                if child.visits == 0 else (child.q_value + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
 
 def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                model_params: ModelParams) -> list[MCTSNode]:
     path = []
     current_node = node
 
-    for _ in range(depth_limit):
+    while len(path) < depth_limit:  # Use length check instead of range
+        if current_node not in path:  # Only append if not already in path
+            path.append(current_node)
         if current_node.state is None:
             current_node.state = predict_state(current_node.parent.state, current_node.action, tokenizer, transformer_weights, model_params)
             current_node.reward = calculate_reward(current_node.fast_reward, current_node.state.states[-1].confidence)
         if current_node.is_terminal():
-            path.append(current_node)
             break
 
         if not current_node.children:
@@ -87,7 +91,8 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
         # greedy selection vs random selection of children in simulation
         # current_node = max(current_node.children, key=lambda child: child.fast_reward)
         current_node = random.choice(current_node.children)
-        path.append(current_node)
+        print('append path in simulation')
+        print(path)
     return path
 
 def backpropagation(path: list[MCTSNode]) -> float:
@@ -100,12 +105,12 @@ def backpropagation(path: list[MCTSNode]) -> float:
 def backpropagation_max(path: list[MCTSNode]) -> float:
     reward = 0
     for node in reversed(path):
+        node.visits += 1
         reward = reward + node.reward
         position_from_end = len(path) - path.index(node)
         mean_reward = reward / position_from_end
         node.max_reward = max(node.max_reward, mean_reward)
     return reward
-
 
 def get_highest_reward_path(root: MCTSNode) -> tuple[float, list[MCTSNode]]:
     """
@@ -129,33 +134,36 @@ def get_highest_reward_path(root: MCTSNode) -> tuple[float, list[MCTSNode]]:
 
     return dfs([root])
 
-
 def get_highest_reward_path_max(root: MCTSNode) -> tuple[float, list[MCTSNode]]:
-    """Find path with highest reward through DFS."""
     def dfs(path: list[MCTSNode]) -> tuple[float, list[MCTSNode]]:
         current = path[-1]
         if current.is_terminal():
+            if current.reward == 0:  # Check if reward has been evaluated
+                return float('-inf'), path
             return current.max_reward, path
 
         if current.children is None:
             return float('-inf'), path
 
-        visited_children = [c for c in current.children if c.state is not None]
-        if not visited_children:
+        # Look for children that have been evaluated
+        evaluated_children = [c for c in current.children if c.reward != 0]
+        if not evaluated_children:
             return float('-inf'), path
 
-        return max((dfs(path + [child]) for child in visited_children), key=lambda x: x[0])
+        return max((dfs(path + [child]) for child in evaluated_children), key=lambda x: x[0])
 
     return dfs([root])
 
 def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
          model_params: ModelParams) -> State:
     root = MCTSNode(init_state, init_state.question, None, 0., 0.)
-    for _ in range(rollouts):
+    for _ in range(rollouts + 1):
         path = select_node(root)
-        last_node = path[-1]
+        last_node = path.pop()
         simulation_path = simulation(last_node, depth_limit - len(path), action_generation, tokenizer, transformer_weights, model_params)
         path.extend(simulation_path)
+        print('simulation path extended')
+        print(path)
         backpropagation_max(path)
 
     reward, best_path = get_highest_reward_path_max(root)
