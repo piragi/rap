@@ -54,17 +54,17 @@ def predict_action(state: State, tokenizer: Tokenizer, transformer_weights: Tran
     Predict next action(s) given current state.
     """
     # Build prompt
-    s_t0 = state.prefix + f"\n\n{state.question}"
+    s_t0 = f"\n\n{state.question}"
     s_t0 += ''.join(f'\nQuestion 5.{i+1}: {substate.subquestion}\nAnswer 5.{i+1}: {substate.subanswer}' for i, substate in enumerate(state.states))
     action = f'\nQuestion 5.{len(state.states)+1}: '
 
     # Batch prediction
-    prompts = [s_t0 + action] * batch_size
+    prompts = [state.prefix + s_t0 + action] * batch_size
     subquestions = advance_tokens(prompts, tokenizer, transformer_weights, model_params)
 
     # Batch evaluate
     a_t0s = [s_t0 + f'\nNew question 5.{len(state.states)+1}: {subq}' for subq in subquestions]
-    confidences = get_self_eval(a_t0s, subquestions, tokenizer, transformer_weights, model_params)
+    confidences = get_self_eval(a_t0s, tokenizer, transformer_weights, model_params)
 
     return list(zip(subquestions, confidences))
 

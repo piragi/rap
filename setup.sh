@@ -4,7 +4,7 @@ set -e  # Exit on any error
 # Configuration - replace these values
 REPO_URL="https://github.com/piragi/rap.git"
 META_URL="https://llama3-2-lightweight.llamameta.net/*?Policy=eyJTdGF0ZW1lbnQiOlt7InVuaXF1ZV9oYXNoIjoianZyc3pkaW9zaXJ5anpyZHB2NHFiNGkyIiwiUmVzb3VyY2UiOiJodHRwczpcL1wvbGxhbWEzLTItbGlnaHR3ZWlnaHQubGxhbWFtZXRhLm5ldFwvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTczNjUzMzQ0OH19fV19&Signature=plrv8cYZHMbatxrkyJeI8uzegKVBj6RvixOgxQidtlrr6kKpZj7zxhwFCmTk04PlmMgGZOHAwFQuTUsnPZ0YsE2hgQjLa4rc2Dv9ACagvgNpbhmSnLBE9bqj3452a6V-weNKSqdfsyGGiYn1rkqsbrsHr6N1cCUBf-OMMdRb4b3D%7EcKkbVM8dwsmUo2bmNJSYWHTYsli3Z8tkedEgkCti5XI9NbIN5EOcP1dYTRXVFJPoiboEAeuQfi2sbx2RX66UsuG1-Wtg3p9QG5X0vXKsl5yNe6-4ncDxpHvN5UKTmEDlbDGxldfvfrJGzthtMYLMnJl4YIwjttsax260IcKbw__&Key-Pair-Id=K15QRJLYKIFSLZ&Download-Request-ID=954820303247478"  # The temporary URL from Meta
-ENV_NAME="llama_env"  # Name of the virtual environment
+ENV_NAME="env"  # Name of the virtual environment
 
 echo "Starting setup process..."
 
@@ -51,7 +51,7 @@ if [ -z "$META_URL" ]; then
 echo "Error: META_URL environment variable not set"
 exit 1
 fi
-llama model download --source meta --model-id Llama3.2-3B-Instruct --meta-url "$META_URL"
+llama model download --source meta --model-id Llama3.2-3B --meta-url "$META_URL"
 
 # Verify the model files exist
 echo "Verifying model files..."

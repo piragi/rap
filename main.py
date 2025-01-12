@@ -205,11 +205,11 @@ def get_confidence_state(action: str, max_samples: int, tokenizer: Tokenizer, tr
     confidence = count / len(answers)
     return tokens_map[most_common_answer].unsqueeze(0), confidence
 
-def get_self_eval(reasoning: Union[str, List[str]], new_subquestion: Union[str, List[str]], tokenizer: Tokenizer,
+def get_self_eval(reasoning: Union[str, List[str]], tokenizer: Tokenizer,
                   transformer_weights: TransformerWeights, model_params: ModelParams) -> List[float]:
     yes_probs = []
-    for r, q in zip(reasoning, new_subquestion):
-        prompt = f"{USEFUL_PREFIX}{r}{q}\nIs the new question useful? "
+    for r in reasoning:
+        prompt = f"{USEFUL_PREFIX}{r}\nIs the new question useful?"
         tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")], 
                             dtype=torch.long, device=device)
         
@@ -239,8 +239,8 @@ def get_self_eval(reasoning: Union[str, List[str]], new_subquestion: Union[str, 
             attention_mask=attn_mask,
         )
 
-        yes_token = tokenizer.encode("Yes", bos=False, eos=False, allowed_special="all")[0]
-        no_token = tokenizer.encode("No", bos=False, eos=False, allowed_special="all")[0] 
+        yes_token = tokenizer.encode(" Yes", bos=False, eos=False, allowed_special="all")[0]
+        no_token = tokenizer.encode(" No", bos=False, eos=False, allowed_special="all")[0] 
         
         batch_logits = logits[:, -1][:, [yes_token, no_token]]
         probs = torch.softmax(batch_logits, dim=-1)
@@ -268,7 +268,7 @@ def generate(
     model_params: ModelParams,
     tokens: torch.Tensor,
     tokenizer: Tokenizer,
-    temperature: float = 0.9,
+    temperature: float = 0.8,
     top_p: float = 0.90,
     max_gen_len: int = 200,
 ) -> torch.Tensor:
@@ -338,19 +338,3 @@ def generate(
                         finished[i] = True
             generated.append(next_token)
     return torch.cat(generated, dim=1)
-
-if __name__ == "__main__":
-    home_dir = os.path.expanduser("~")
-    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B-Instruct")
-    model_params = load_model_params(os.path.join(model_path, "params.json"))
-    transformer_weights = load_weights(os.path.join(model_path, "consolidated.00.pth"))
-    tokenizer = Tokenizer(model_path=os.path.join(model_path, "tokenizer.model"))
-    prompt4 = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are a masterful story teller. you can paint with all the colors of the wind.<|eot_id|><|start_header_id|>user<|end_header_id|>
-
-Tell me a long and wonderful story aboout the adventures of the elven mage frieren and her band of heros<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-"""
-
-    raw_tokens1 = tokenizer.encode(prompt4, bos=False, eos=False, allowed_special="all")
-    print(prompt4)
-    generate(transformer_weights, model_params, raw_tokens1, tokenizer)
