@@ -44,6 +44,7 @@ def advance_tokens(prompt: List[str], tokenizer: Tokenizer, transformer_weights:
             text = text.split('.\n')[0]
         if '\n\n' in text:
             text = text.split('\n\n')[0]
+        text = text.strip()
         final_texts.append(text)
 
     return final_texts
@@ -54,7 +55,7 @@ def predict_action(state: State, tokenizer: Tokenizer, transformer_weights: Tran
     Predict next action(s) given current state.
     """
     # Build prompt
-    s_t0 = f"\n\n{state.question}"
+    s_t0 = f"\n{state.question}"
     s_t0 += ''.join(f'\nQuestion 5.{i+1}: {substate.subquestion}\nAnswer 5.{i+1}: {substate.subanswer}' for i, substate in enumerate(state.states))
     action = f'\nQuestion 5.{len(state.states)+1}: '
 
@@ -71,7 +72,7 @@ def predict_action(state: State, tokenizer: Tokenizer, transformer_weights: Tran
 def predict_state(state: State, action: Action, tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams) -> State:
     """Generate next state given an action"""
     # Build prompt
-    s_t0 = state.prefix + f"\n\n{state.question}"
+    s_t0 = state.prefix + f"\n{state.question}"
     s_t0 += ''.join(f'\nQuestion 5.{i+1}: {substate.subquestion}\nAnswer 5.{i+1}: {substate.subanswer}' for i, substate in enumerate(state.states))
     s_t0 += f'\nQuestion 5.{len(state.states)+1}: {action}\nAnswer 5.{len(state.states)+1}: '
 

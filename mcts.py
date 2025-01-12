@@ -55,7 +55,7 @@ def select_node(node: MCTSNode, child_select="max") -> list[MCTSNode]:
                 node.children,
                 key=lambda child:
                 # For unvisited nodes, use fast_reward directly
-                (child.fast_reward + W_EXP * np.sqrt(np.log(1))) if child.visits == 0
+                (child.fast_reward + W_EXP * np.sqrt(np.log(node.visits))) if child.visits == 0
                 # For visited nodes, use standard UCT with max_reward
                 else (child.max_reward + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
 
@@ -157,7 +157,7 @@ def get_highest_reward_path_max(root: MCTSNode) -> tuple[float, list[MCTSNode]]:
 def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
          model_params: ModelParams) -> State:
     root = MCTSNode(init_state, init_state.question, None, 0., 0.)
-    for _ in range(rollouts + 1):
+    for _ in range(rollouts):
         path = select_node(root)
         last_node = path.pop()
         simulation_path = simulation(last_node, depth_limit - len(path), action_generation, tokenizer, transformer_weights, model_params)

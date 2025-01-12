@@ -47,8 +47,7 @@ def run_benchmark(dataset,
     results = []
 
     prefix = """Given a question, please decompose it into sub-questions. For each sub-question, please answer it in a complete sentence, ending with "The answer is". When the original question is answerable, please start the subquestion with "Now we can answer the question: ".
-
-Here are some examples: Question 1: Four years ago, Kody was only half as old as Mohamed. If Mohamed is currently twice as 30 years old, how old is Kody?
+Question 1: Four years ago, Kody was only half as old as Mohamed. If Mohamed is currently twice as 30 years old, how old is Kody?
 Question 1.1: How old is Mohamed?
 Answer 1.1: He is currently 30 * 2 = 60 years old. The answer is 60.
 Question 1.2: How old was Mohamed four years ago?
@@ -58,12 +57,14 @@ Answer 1.3: Kody was half as old as Mohamed four years ago. Thus, Kody was 56 / 
 Question 1.4: Now we can answer the question: How old is Kody?
 Answer 1.4: She is currently 28 + 4 = 32 years old. The answer is 32.
 
+Given a question, please decompose it into sub-questions. For each sub-question, please answer it in a complete sentence, ending with "The answer is". When the original question is answerable, please start the subquestion with "Now we can answer the question: ".
 Question 2: On a moonless night, three fireflies danced in the evening breeze. They were joined by four less than a dozen more fireflies before two of the fireflies flew away. How many fireflies remained?
 Question 2.1: How many fireflies joined?
 Answer 2.1: The fireflies were joined by four less than a dozen more fireflies, which are 12 - 4 = 8 fireflies. The answer is 8.
 Question 2.2: Now we can answer the question: How many fireflies remained?
 Answer 2.2: Three fireflies were dancing originally. They were joined by 8 fireflies before two of them flew away. So there were 3 + 8 - 2 = 9 remaining. The answer is 9.
 
+Given a question, please decompose it into sub-questions. For each sub-question, please answer it in a complete sentence, ending with "The answer is". When the original question is answerable, please start the subquestion with "Now we can answer the question: ".
 Question 3: Ali has four $10 bills and six $20 bills that he saved after working for Mr. James on his farm. Ali gives her sister half of the total money he has and uses 3/5 of the remaining amount of money to buy dinner. Calculate the amount of money he has after buying the dinner.
 Question 3.1: How much money does Ali have in total?
 Answer 3.1: Ali has four $10 bills and six $20 bills. So he has 4 * 10 + 6 * 20 = 160 dollars. The answer is 160.
@@ -76,11 +77,14 @@ Answer 3.4: Ali uses 3/5 of the remaining amount of money to buy dinner. So he u
 Question 3.5: Now we can answer the question: How much money does Ali have after buying the dinner?
 Answer 3.5: After buying the dinner, Ali has 80 - 48 = 32 dollars left. The answer is 32.
 
+Given a question, please decompose it into sub-questions. For each sub-question, please answer it in a complete sentence, ending with "The answer is". When the original question is answerable, please start the subquestion with "Now we can answer the question: ".
 Question 4: A car is driving through a tunnel with many turns. After a while, the car must travel through a ring that requires a total of 4 right-hand turns. After the 1st turn, it travels 5 meters. After the 2nd turn, it travels 8 meters. After the 3rd turn, it travels a little further and at the 4th turn, it immediately exits the tunnel. If the car has driven a total of 23 meters around the ring, how far did it have to travel after the 3rd turn?
 Question 4.1: How far did the car travel except for the 3rd turn?
 Answer 4.1: It travels 5 meters after the 1st, 8 meters after the 2nd, and 0 meters after the 4th turn. It’s a total of 5 + 8 + 0 = 13 meters. The answer is 13.
 Question 4.2: Now we can answer the question: How far did the car have to travel after the 3rd turn?
-Answer 4.2: The car has driven a total of 23 meters around the ring. It travels 13 meters except for the 3rd turn. So it has to travel 23 - 13 = 10 meters after the 3rd turn. The answer is 10."""
+Answer 4.2: The car has driven a total of 23 meters around the ring. It travels 13 meters except for the 3rd turn. So it has to travel 23 - 13 = 10 meters after the 3rd turn. The answer is 10.
+
+Given a question, please decompose it into sub-questions. For each sub-question, please answer it in a complete sentence, ending with "The answer is". When the original question is answerable, please start the subquestion with "Now we can answer the question: "."""
 
     for idx, example in tqdm(enumerate(dataset, start=start_idx)):
         try:
@@ -116,6 +120,7 @@ Answer 4.2: The car has driven a total of 23 meters around the ring. It travels 
                         # Compare prediction with target
                         is_correct = abs(pred - target) < 1e-6
                         correct += int(is_correct)
+                        print(f'pred: {pred}, target: {target}, result: {is_correct}')
 
                         results.append({
                             'index': idx,  # Added index to results
@@ -212,7 +217,7 @@ Q: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages an
                     tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")
                     tokens = torch.tensor([tokens]).cuda()
 
-                    output_tokens = generate(transformer_weights, model_params, tokens, tokenizer, temperature=0.8, max_gen_len=512)
+                    output_tokens = generate(transformer_weights, model_params, tokens, tokenizer, temperature=0.8, max_gen_len=2048)
 
                     response = tokenizer.decode(output_tokens[0].tolist())
                     reasoning = response.split(prompt)[-1].strip()
@@ -315,7 +320,7 @@ if __name__ == "__main__":
                                     transformer_weights=transformer_weights,
                                     max_iterations=max_iterations,
                                     model_params=model_params,
-                                    n_samples=100,
+                                    n_samples=400,
                                     start_idx=start_idx)
         output_file = f'gsm8k_cot_results_start:{start_idx}_iterations:{max_iterations}.json'
     else:  # rap
