@@ -72,8 +72,8 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
     path = []
     current_node = node
 
-    while len(path) < depth_limit:  # Use length check instead of range
-        if current_node not in path:  # Only append if not already in path
+    while len(path) < depth_limit:
+        if current_node not in path:
             path.append(current_node)
         if current_node.state is None:
             current_node.state = predict_state(current_node.parent.state, current_node.action, tokenizer, transformer_weights, model_params)
@@ -82,17 +82,26 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
             break
 
         if not current_node.children:
-            # Generate all actions at once
-            actions_with_rewards = predict_action(current_node.state, tokenizer, transformer_weights, model_params, action_generation)
-            # Create children nodes
-            for action, fast_reward in actions_with_rewards:
-                current_node.children.append(MCTSNode(state=None, action=action, parent=current_node, reward=0., fast_reward=fast_reward))
+            if len(path) == depth_limit - 1:
+                original_question = "Now we can answer the question: " + current_node.state.question
+                fast_reward = 1.0  # Or some other appropriate default
+                current_node.children.append(MCTSNode(
+                    state=None, 
+                    action=original_question,
+                    parent=current_node,
+                    reward=0.,
+                    fast_reward=fast_reward
+                ))
+            else:
+                # Generate all actions at once
+                actions_with_rewards = predict_action(current_node.state, tokenizer, transformer_weights, model_params, action_generation)
+                # Create children nodes
+                for action, fast_reward in actions_with_rewards:
+                    current_node.children.append(MCTSNode(state=None, action=action, parent=current_node, reward=0., fast_reward=fast_reward))
 
         # greedy selection vs random selection of children in simulation
         # current_node = max(current_node.children, key=lambda child: child.fast_reward)
         current_node = random.choice(current_node.children)
-        print('append path in simulation')
-        print(path)
     return path
 
 def backpropagation(path: list[MCTSNode]) -> float:
