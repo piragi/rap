@@ -54,15 +54,15 @@ def predict_action(state: State, tokenizer: Tokenizer, transformer_weights: Tran
     """
     Predict next action(s) given current state.
     """
-    s_t0 = f"\n{state.question}"
     if "Question 1:" in state.prefix:
-        s_t0 += ''.join(f'\nQuestion 5.{i+1}: {substate.subquestion}\nAnswer 5.{i+1}: {substate.subanswer}' for i, substate in enumerate(state.states))
+        s_t0 = f"\nQuestion 5:{state.question}"
+        s_t0 += ''.join(f'\nQuestion 5.{i+1}: {substate.subquestion}\nAnswer 5.{i+1}: {substate.subanswer}'
+                        for i, substate in enumerate(state.states))
         action = f'\nQuestion 5.{len(state.states)+1}: '
     else:
+        s_t0 = f"\nQuestion:{state.question}"
         s_t0 += ''.join(f'\nQuestion: {substate.subquestion}\nAnswer: {substate.subanswer}' for i, substate in enumerate(state.states))
         action = f'\nQuestion: '
-
-    # Build prompt
 
     # Batch prediction
     prompts = [state.prefix + s_t0 + action] * batch_size
@@ -71,20 +71,27 @@ def predict_action(state: State, tokenizer: Tokenizer, transformer_weights: Tran
     # Batch evaluate
     if "Question 1:" in state.prefix:
         a_t0s = [s_t0 + f'\nNew question 5.{len(state.states)+1}: {subq}' for subq in subquestions]
-    else: 
+    else:
         a_t0s = [s_t0 + f'\nNew question: {subq}' for subq in subquestions]
     confidences = get_self_eval(a_t0s, tokenizer, transformer_weights, model_params)
 
     return list(zip(subquestions, confidences))
 
-def predict_state(state: State, action: Action, tokenizer: Tokenizer, transformer_weights: TransformerWeights, model_params: ModelParams, confidence=8) -> State:
+def predict_state(state: State,
+                  action: Action,
+                  tokenizer: Tokenizer,
+                  transformer_weights: TransformerWeights,
+                  model_params: ModelParams,
+                  confidence=1) -> State:
     """Generate next state given an action"""
     # Build prompt
-    s_t0 = state.prefix + f"\n{state.question}"
     if "Question 1:" in state.prefix:
-        s_t0 += ''.join(f'\nQuestion 5.{i+1}: {substate.subquestion}\nAnswer 5.{i+1}: {substate.subanswer}' for i, substate in enumerate(state.states))
+        s_t0 = state.prefix + f"\nQuestion 5:{state.question}"
+        s_t0 += ''.join(f'\nQuestion 5.{i+1}: {substate.subquestion}\nAnswer 5.{i+1}: {substate.subanswer}'
+                        for i, substate in enumerate(state.states))
         s_t0 += f'\nQuestion 5.{len(state.states)+1}: {action}\nAnswer 5.{len(state.states)+1}: '
     else:
+        s_t0 = state.prefix + f"\nQuestion:{state.question}"
         s_t0 += ''.join(f'\nQuestion: {substate.subquestion}\nAnswer: {substate.subanswer}' for i, substate in enumerate(state.states))
         s_t0 += f'\nQuestion: {action}\nAnswer: '
 

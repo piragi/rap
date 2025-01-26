@@ -64,8 +64,8 @@ def select_node(node: MCTSNode, child_select="max") -> list[MCTSNode]:
                 node.children,
                 key=lambda child:
                 # Same pattern for mean selection
-                (child.fast_reward + W_EXP * np.sqrt(np.log(1))) if child.visits == 0 
-                else (child.q_value + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
+                (child.fast_reward + W_EXP * np.sqrt(np.log(1)))
+                if child.visits == 0 else (child.q_value + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
 
 def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                model_params: ModelParams) -> list[MCTSNode]:
@@ -85,13 +85,7 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
             if len(path) == depth_limit - 1:
                 original_question = "Now we can answer the question: " + current_node.state.question
                 fast_reward = 1.0  # Or some other appropriate default
-                current_node.children.append(MCTSNode(
-                    state=None, 
-                    action=original_question,
-                    parent=current_node,
-                    reward=0.,
-                    fast_reward=fast_reward
-                ))
+                current_node.children.append(MCTSNode(state=None, action=original_question, parent=current_node, reward=0., fast_reward=fast_reward))
             else:
                 # Generate all actions at once
                 actions_with_rewards = predict_action(current_node.state, tokenizer, transformer_weights, model_params, action_generation)
@@ -171,8 +165,6 @@ def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: 
         last_node = path.pop()
         simulation_path = simulation(last_node, depth_limit - len(path), action_generation, tokenizer, transformer_weights, model_params)
         path.extend(simulation_path)
-        print('simulation path extended')
-        print(path)
         backpropagation_max(path)
 
     reward, best_path = get_highest_reward_path_max(root)

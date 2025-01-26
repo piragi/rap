@@ -209,7 +209,7 @@ def get_confidence_state(action: str,
 def get_self_eval(reasoning: Union[str, List[str]], tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                   model_params: ModelParams) -> List[float]:
     yes_probs = []
-    if "Question 1:" in reasoning[0]: useful = json.load(open('prompts.json'))['useful']['prompt']
+    if "Question 5:" in reasoning[0]: useful = json.load(open('prompts.json'))['useful']['prompt']
     else: useful = json.load(open('prompts.json'))['useful_unnumbered']['prompt']
     for r in reasoning:
         prompt = f"{useful}{r}\nIs the new question useful?"
@@ -241,8 +241,8 @@ def get_self_eval(reasoning: Union[str, List[str]], tokenizer: Tokenizer, transf
             attention_mask=attn_mask,
         )
 
-        yes_token = tokenizer.encode(" Yes", bos=False, eos=False, allowed_special="all")[0]
-        no_token = tokenizer.encode(" No", bos=False, eos=False, allowed_special="all")[0]
+        yes_token = tokenizer.encode("Yes", bos=False, eos=False, allowed_special="all")[0]
+        no_token = tokenizer.encode("No", bos=False, eos=False, allowed_special="all")[0]
 
         batch_logits = logits[:, -1][:, [yes_token, no_token]]
         probs = torch.softmax(batch_logits, dim=-1)

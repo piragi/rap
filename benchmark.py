@@ -68,7 +68,9 @@ def run_benchmark(dataset,
                 print("=" * 50 + "\n", file=f)
 
             # Initialize state with question
-            init_state = State(states=[], prefix=prefix, question="Question 5: " + question)
+            init_state = State(states=[], prefix=prefix, question=question)
+            print(init_state.prefix)
+            print(init_state.question)
 
             # Run MCTS
             try:
@@ -130,6 +132,8 @@ def run_cot_benchmark(dataset,
     Returns:
         Dict containing accuracy and detailed results
     """
+    prefix = """Given the following problem, reason and give a final answer to the problem. Your response should end with \"The answer is [answer]\" where [answer] is the response to the problem.\nQ: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?\nA: Natalia sold 48 clips in April and half as many clips in May, so she sold 48 / 2 = 24 clips in May. Altogether, she sold 48 + 24 = 72 clips. The answer is 72.\n\nGiven the following problem, reason and give a final answer to the problem. Your response should end with \"The answer is [answer]\" where [answer] is the response to the problem.\nQ: Weng earns $12 an hour for babysitting. Yesterday, she just did 50 minutes of babysitting. How much did she earn?\nA: Since Weng earns $12 an hour for babysitting, she earns $12 / 60 = $0.2 per minute. Working 50 minutes, she earned $0.2 x 50 = $10. The answer is 10.\n\nGiven the following problem, reason and give a final answer to the problem. Your response should end with \"The answer is [answer]\" where [answer] is the response to the problem.\nQ: Betty is saving money for a new wallet which costs $100. Betty has only half of the money she needs. Her parents decided to give her $15 for that purpose, and her grandparents twice as much as her parents. How much more money does Betty need to buy the wallet?\nA: In the beginning, Betty has only half of the money she needs, which is 100 / 2 = $50. Her grandparents gave her twice as much as her parents, so they gave her 15 * 2 = $30. Now that she got $15 from her parents and $30 from her grandparents, she will need $100 - $15 - $30 = $55. Since she already has $50, she needs $55 - $50 = $5 more. The answer is 5.\n\nGiven the following problem, reason and give a final answer to the problem. Your response should end with \"The answer is [answer]\" where [answer] is the response to the problem.\nQ: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages and today, she read twice as many pages as yesterday. If she wants to read half of the remaining pages tomorrow, how many pages should she read?\nA: Julie read twice as many pages as yesterday, so she read 12 * 2 = 24 pages today. Since yesterday, Julie read 12 + 24 = 36 pages. So, there are 120 - 36 = 84 pages left to be read. Since she wants to read half of the remaining pages, she should read 84 / 2 = 42 pages. The answer is 42.\n\n"""
+
     prefix = """Q: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?\nA: Natalia sold 48 clips in April and half as many clips in May, so she sold 48 / 2 = 24 clips in May. Altogether, she sold 48 + 24 = 72 clips. The answer is 72.\n\nQ: Weng earns $12 an hour for babysitting. Yesterday, she just did 50 minutes of babysitting. How much did she earn?\nA: Since Weng earns $12 an hour for babysitting, she earns $12 / 60 = $0.2 per minute. Working 50 minutes, she earned $0.2 x 50 = $10. The answer is 10.\n\nQ: Betty is saving money for a new wallet which costs $100. Betty has only half of the money she needs. Her parents decided to give her $15 for that purpose, and her grandparents twice as much as her parents. How much more money does Betty need to buy the wallet?\nA: In the beginning, Betty has only half of the money she needs, which is 100 / 2 = $50. Her grandparents gave her twice as much as her parents, so they gave her 15 * 2 = $30. Now that she got $15 from her parents and $30 from her grandparents, she will need $100 - $15 - $30 = $55. Since she already has $50, she needs $55 - $50 = $5 more. The answer is 5.\n\nQ: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages and today, she read twice as many pages as yesterday. If she wants to read half of the remaining pages tomorrow, how many pages should she read?\nA: Julie read twice as many pages as yesterday, so she read 12 * 2 = 24 pages today. Since yesterday, Julie read 12 + 24 = 36 pages. So, there are 120 - 36 = 84 pages left to be read. Since she wants to read half of the remaining pages, she should read 84 / 2 = 42 pages. The answer is 42.\n\n"""
 
     if n_samples:
@@ -261,7 +265,7 @@ if __name__ == "__main__":
 
     # Load model components
     home_dir = os.path.expanduser("~")
-    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B-Instruct")
+    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B")
     model_params = load_model_params(os.path.join(model_path, "params.json"))
     transformer_weights = load_weights(os.path.join(model_path, "consolidated.00.pth"))
     tokenizer = Tokenizer(model_path=os.path.join(model_path, "tokenizer.model"))
@@ -278,12 +282,12 @@ if __name__ == "__main__":
                                     transformer_weights=transformer_weights,
                                     max_iterations=max_iterations,
                                     model_params=model_params,
-                                    n_samples=400,
+                                    n_samples=100,
                                     start_idx=start_idx)
         output_file = f'gsm8k_cot_results_start:{start_idx}_iterations:{max_iterations}.json'
     else:  # rap
         print(f"Running Reasoning via Planning (RAP) benchmark starting from index {start_idx}...")
-        prefix = json.load(open('prompts.json'))['original']['prompt']
+        prefix = json.load(open('prompts.json'))['repeated']['prompt']
         rollouts = 3
         results = run_benchmark(dataset=test_dataset,
                                 tokenizer=tokenizer,
@@ -293,7 +297,7 @@ if __name__ == "__main__":
                                 n_samples=100,
                                 rollouts=rollouts,
                                 depth_limit=6,
-                                action_generation=4,
+                                action_generation=3,
                                 start_idx=start_idx)
         output_file = f'gsm8k_rap_results_start:{start_idx}_rollouts:{rollouts}.json'
 
