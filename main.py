@@ -1,4 +1,4 @@
-import os
+import json
 from collections import Counter
 from typing import List, Optional, Tuple, Union
 
@@ -10,7 +10,6 @@ from tokenizer import Tokenizer
 from weights import TransformerWeights, load_weights
 
 MAX_SEQ_LEN = 8192
-USEFUL_PREFIX = """Given a question and some sub-questions, determine whether the last sub-question is useful to answer the question. Output 'Yes' or 'No', and a reason.\n\nQuestion 1: Four years ago, Kody was only half as old as Mohamed. If Mohamed is currently twice as 30 years old, how old is Kody?\nQuestion 1.1: How old is Mohamed?\nQuestion 1.2: How old was Mohamed four years ago?\nNew question 1.3: How old was Kody four years ago?\nIs the new question useful? Yes. We need the answer to calculate how old is Kody now.\n\nQuestion 2: Traci and Harris are baking cakes together. Traci has brought flour from her own house and Harris has 400g of flour in his house. Each cake needs 100g of flour and Traci and Harris have created 9 cakes each. How much flour, in grams, did Traci bring from her own house?\nNew question 2.1: How many cakes did Traci bring from her own house?\nIs the new question useful? No. The new question is not related to the original question.\n\nQuestion 3: A quantity surveyor is figuring the construction costs for a couple that wishes to build a house. The costs are as follows: land costs $50 per square meter, bricks cost $100 per 1000 bricks and roof tiles cost $10 per roof tile. If the house they wish to build requires 2000 square meters, 10000 bricks, and 500 roof tiles, how much construction costs are required for this project?\nQuestion 3.1: How much does the land cost?\nQuestion 3.2: How much do the bricks cost?\nNew question 3.3: How much do the roof tiles cost?\nIs the new question useful? Yes. We need the answer to calculate the total construction costs.\n\nQuestion 4: Wallace's water heater is twice the size of Catherine's water heater. If the capacity of Wallace's water heater is 40 gallons and it's 3/4 full, calculate the total number of gallons of water they both have if Catherine's water heater is also full with water to 3/4 of its capacity.\nQuestion 4.1: How much water is in Wallace's water heater?\nNew question 4.2: How much water do they have in total?\nIs the new question useful? No. It is too hard to answer the new question based on the current information."""
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -210,8 +209,10 @@ def get_confidence_state(action: str,
 def get_self_eval(reasoning: Union[str, List[str]], tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                   model_params: ModelParams) -> List[float]:
     yes_probs = []
+    if "Question 1:" in reasoning[0]: useful = json.load(open('prompts.json'))['useful']['prompt']
+    else: useful = json.load(open('prompts.json'))['useful_unnumbered']['prompt']
     for r in reasoning:
-        prompt = f"{USEFUL_PREFIX}{r}\nIs the new question useful?"
+        prompt = f"{useful}{r}\nIs the new question useful?"
         tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")], dtype=torch.long, device=device)
 
         seqlen = tokens.shape[1]

@@ -64,8 +64,8 @@ def select_node(node: MCTSNode, child_select="max") -> list[MCTSNode]:
                 node.children,
                 key=lambda child:
                 # Same pattern for mean selection
-                (child.fast_reward + W_EXP * np.sqrt(np.log(1)))
-                if child.visits == 0 else (child.q_value + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
+                (child.fast_reward + W_EXP * np.sqrt(np.log(1))) if child.visits == 0 
+                else (child.q_value + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
 
 def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                model_params: ModelParams) -> list[MCTSNode]:
