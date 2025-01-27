@@ -211,8 +211,9 @@ def get_self_eval(reasoning: Union[str, List[str]], tokenizer: Tokenizer, transf
     yes_probs = []
     if "Question 5:" in reasoning[0]: useful = json.load(open('prompts.json'))['useful']['prompt']
     else: useful = json.load(open('prompts.json'))['useful_unnumbered']['prompt']
+    useful = json.load(open('prompts.json'))['useful_noprompt']['prompt']
     for r in reasoning:
-        prompt = f"{useful}{r}\nIs the new question useful?"
+        prompt = f"{useful} {r}\nIs the new question useful?"
         tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")], dtype=torch.long, device=device)
 
         seqlen = tokens.shape[1]
@@ -270,7 +271,7 @@ def generate(
     model_params: ModelParams,
     tokens: torch.Tensor,
     tokenizer: Tokenizer,
-    temperature: float = 0.9,
+    temperature: float = 0.8,
     top_p: float = 0.90,
     max_gen_len: int = 200,
 ) -> torch.Tensor:

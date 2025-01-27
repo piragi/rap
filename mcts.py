@@ -68,7 +68,7 @@ def select_node(node: MCTSNode, child_select="max") -> list[MCTSNode]:
                 if child.visits == 0 else (child.q_value + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
 
 def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
-               model_params: ModelParams) -> list[MCTSNode]:
+               model_params: ModelParams, confidence: int) -> list[MCTSNode]:
     path = []
     current_node = node
 
@@ -76,7 +76,7 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
         if current_node not in path:
             path.append(current_node)
         if current_node.state is None:
-            current_node.state = predict_state(current_node.parent.state, current_node.action, tokenizer, transformer_weights, model_params)
+            current_node.state = predict_state(current_node.parent.state, current_node.action, tokenizer, transformer_weights, model_params, confidence)
             current_node.reward = calculate_reward(current_node.fast_reward, current_node.state.states[-1].confidence)
         if current_node.is_terminal():
             break
@@ -158,12 +158,12 @@ def get_highest_reward_path_max(root: MCTSNode) -> tuple[float, list[MCTSNode]]:
     return dfs([root])
 
 def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
-         model_params: ModelParams) -> State:
+         model_params: ModelParams, confidence: int) -> State:
     root = MCTSNode(init_state, init_state.question, None, 0., 0.)
     for _ in range(rollouts):
         path = select_node(root)
         last_node = path.pop()
-        simulation_path = simulation(last_node, depth_limit - len(path), action_generation, tokenizer, transformer_weights, model_params)
+        simulation_path = simulation(last_node, depth_limit - len(path), action_generation, tokenizer, transformer_weights, model_params, confidence)
         path.extend(simulation_path)
         backpropagation_max(path)
 

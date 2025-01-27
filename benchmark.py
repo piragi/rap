@@ -31,6 +31,7 @@ def run_benchmark(dataset,
                   n_samples: int = 100,
                   rollouts: int = 10,
                   depth_limit: int = 5,
+                  confidence: int = 1,
                   action_generation: int = 5,
                   trace_file: str = "mcts_trace.txt",
                   start_idx: int = 0) -> Dict:  # Added start_idx parameter
@@ -74,7 +75,7 @@ def run_benchmark(dataset,
 
             # Run MCTS
             try:
-                final_state = mcts(init_state, rollouts, depth_limit, action_generation, tokenizer, transformer_weights, model_params)
+                final_state = mcts(init_state, rollouts, depth_limit, action_generation, tokenizer, transformer_weights, model_params, confidence)
 
                 # Extract predicted answer
                 if final_state and final_state.states:
@@ -297,6 +298,7 @@ if __name__ == "__main__":
                                 n_samples=100,
                                 rollouts=rollouts,
                                 depth_limit=6,
+                                confidence=1,
                                 action_generation=3,
                                 start_idx=start_idx)
         output_file = f'gsm8k_rap_results_start:{start_idx}_rollouts:{rollouts}.json'

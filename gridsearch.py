@@ -11,7 +11,7 @@ from benchmark import run_benchmark
 from config import ModelParams
 from main import Tokenizer, load_model_params, load_weights
 
-def load_prompts(prompt_file: str = 'prompts.json', prompt_names: List[str] = ["original", "repeated"]) -> Dict[str, str]:
+def load_prompts(prompt_file: str = 'prompts.json', prompt_names: List[str] = ["repeated"]) -> Dict[str, str]:
     """
     Load prompts from JSON file.
     
@@ -99,6 +99,7 @@ def run_grid_search(test_dataset,
                 rollouts=param_dict['rollouts'],
                 depth_limit=param_dict['depth_limit'],
                 action_generation=param_dict['action_generation'],
+                confidence=param_dict['confidence'],
                 start_idx=start_idx,
                 prefix=current_prompt  # Use the actual prompt text
             )
@@ -143,7 +144,7 @@ if __name__ == "__main__":
     test_dataset = dataset['test']
 
     # Define parameter grid
-    param_grid = {'rollouts': [1], 'depth_limit': [6], 'action_generation': [1]}
+    param_grid = {'rollouts': [1], 'depth_limit': [6], 'action_generation': [1], 'confidence': [1]}
 
     # Run grid search
     results = run_grid_search(
