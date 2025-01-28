@@ -158,7 +158,7 @@ def get_highest_reward_path_max(root: MCTSNode) -> tuple[float, list[MCTSNode]]:
     return dfs([root])
 
 def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
-         model_params: ModelParams, confidence: int) -> State:
+         model_params: ModelParams, confidence: int) -> tuple[State, MCTSNode]:
     root = MCTSNode(init_state, init_state.question, None, 0., 0.)
     for _ in range(rollouts):
         path = select_node(root)
@@ -173,7 +173,7 @@ def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: 
         print("No valid complete path found")
         return None
     append_best_path(best_path)
-    return best_path[-1].state
+    return best_path[-1].state, root
 
 def print_mcts(root: MCTSNode, prefix: str = "", is_last: bool = True, filename: str = "mcts_trace.txt"):
     """

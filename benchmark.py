@@ -1,4 +1,5 @@
 import json
+import time
 import os
 from typing import Dict
 
@@ -10,6 +11,7 @@ from config import ModelParams
 from main import Tokenizer, generate, load_model_params, load_weights
 from mcts import mcts
 from world_model import State
+from aggregate import aggregate
 
 def extract_answer(answer_text: str) -> float:
     """Extract numerical answer from the text."""
@@ -34,7 +36,8 @@ def run_benchmark(dataset,
                   confidence: int = 1,
                   action_generation: int = 5,
                   trace_file: str = "mcts_trace.txt",
-                  start_idx: int = 0) -> Dict:  # Added start_idx parameter
+                  start_idx: int = 0,
+                  use_aggregate: bool = False) -> Dict:  # Added start_idx parameter
     """Run MCTS on GSM8K dataset and compute accuracy."""
 
     # Use subset of dataset if specified
@@ -44,9 +47,11 @@ def run_benchmark(dataset,
         end_idx = len(dataset)
     dataset = dataset.select(range(start_idx, end_idx))
 
-    correct = 0
+    correct_mcts = 0
+    correct_agg = 0
     total = 0
     results = []
+    start_time_total = time.time()
 
     for idx, example in tqdm(enumerate(dataset, start=start_idx)):
         try:
@@ -70,46 +75,86 @@ def run_benchmark(dataset,
 
             # Initialize state with question
             init_state = State(states=[], prefix=prefix, question=question)
-            print(init_state.prefix)
-            print(init_state.question)
 
             # Run MCTS
             try:
-                final_state = mcts(init_state, rollouts, depth_limit, action_generation, tokenizer, transformer_weights, model_params, confidence)
+                final_state, root = mcts(init_state, rollouts, depth_limit, action_generation, 
+                                      tokenizer, transformer_weights, model_params, confidence)
 
-                # Extract predicted answer
+                result_dict = {
+                    'index': idx,
+                    'question': question,
+                    'target': target,
+                }
+
+                # Get MCTS result
                 if final_state and final_state.states:
-                    pred = extract_answer(final_state.states[-1].subanswer)
-                    if pred is not None:
-                        # Compare prediction with target
-                        is_correct = abs(pred - target) < 1e-6
-                        correct += int(is_correct)
-                        print(f'pred: {pred}, target: {target}, result: {is_correct}')
-
-                        results.append({
-                            'index': idx,  # Added index to results
-                            'question': question,
-                            'target': target,
-                            'predicted': pred,
-                            'correct': is_correct,
-                            'steps': [state.subquestion + "\n" + state.subanswer for state in final_state.states]
+                    mcts_pred = extract_answer(final_state.states[-1].subanswer)
+                    if mcts_pred is not None:
+                        is_correct_mcts = abs(mcts_pred - target) < 1e-6
+                        correct_mcts += int(is_correct_mcts)
+                        result_dict.update({
+                            'mcts_prediction': mcts_pred,
+                            'mcts_correct': is_correct_mcts,
+                            'mcts_steps': [state.subquestion + "\n" + state.subanswer 
+                                         for state in final_state.states]
                         })
+
+                # Get aggregation result only if flag is set
+                if use_aggregate:
+                    output, is_correct_agg, reward, conf = aggregate(root, target)
+                    agg_pred = float(output) if output else None
+                    if agg_pred is not None:
+                        correct_agg += int(is_correct_agg)
+                        result_dict.update({
+                            'aggregate_prediction': agg_pred,
+                            'aggregate_correct': is_correct_agg,
+                            'aggregate_reward': reward,
+                            'aggregate_confidence': conf
+                        })
+
+                results.append(result_dict)
+                total += 1
+
+                # Print appropriate progress info
+                print(f"\nQuestion {idx}")
+                print(f"MCTS - pred: {mcts_pred}, correct: {is_correct_mcts}")
+                if use_aggregate:
+                    print(f"Aggregation - pred: {agg_pred}, correct: {is_correct_agg}")
+                print(f"Running accuracy - MCTS: {correct_mcts/total:.2%}", 
+                      end="")
+                if use_aggregate:
+                    print(f", Aggregation: {correct_agg/total:.2%}")
+                else:
+                    print()
+
             except Exception as e:
                 print(f"\nError in MCTS at index {idx}: {str(e)}")
                 continue
-
-            total += 1
-
-            # Print running accuracy with index information
-            print(f"\nQuestion {idx} - Running accuracy: {correct/total:.2%} ({correct}/{total})")
 
         except Exception as e:
             print(f"\nUnexpected error at index {idx}: {str(e)}")
             continue
 
-    accuracy = correct / total if total > 0 else 0
+    total_time = time.time() - start_time_total
+    # Prepare return dictionary
+    results_dict = {
+        'mcts_accuracy': correct_mcts / total if total > 0 else 0,
+        'mcts_correct': correct_mcts,
+        'total': total,
+        'total_time_seconds': total_time,
+        'results': results,
+        'last_index': idx
+    }
+    
+    # Add aggregation results only if flag is set
+    if use_aggregate:
+        results_dict.update({
+            'aggregate_accuracy': correct_agg / total if total > 0 else 0,
+            'aggregate_correct': correct_agg,
+        })
 
-    return {'accuracy': accuracy, 'correct': correct, 'total': total, 'results': results, 'last_index': idx}
+    return results_dict
 
 def run_cot_benchmark(dataset,
                       tokenizer: Tokenizer,
@@ -133,8 +178,6 @@ def run_cot_benchmark(dataset,
     Returns:
         Dict containing accuracy and detailed results
     """
-    prefix = """Given the following problem, reason and give a final answer to the problem. Your response should end with \"The answer is [answer]\" where [answer] is the response to the problem.\nQ: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?\nA: Natalia sold 48 clips in April and half as many clips in May, so she sold 48 / 2 = 24 clips in May. Altogether, she sold 48 + 24 = 72 clips. The answer is 72.\n\nGiven the following problem, reason and give a final answer to the problem. Your response should end with \"The answer is [answer]\" where [answer] is the response to the problem.\nQ: Weng earns $12 an hour for babysitting. Yesterday, she just did 50 minutes of babysitting. How much did she earn?\nA: Since Weng earns $12 an hour for babysitting, she earns $12 / 60 = $0.2 per minute. Working 50 minutes, she earned $0.2 x 50 = $10. The answer is 10.\n\nGiven the following problem, reason and give a final answer to the problem. Your response should end with \"The answer is [answer]\" where [answer] is the response to the problem.\nQ: Betty is saving money for a new wallet which costs $100. Betty has only half of the money she needs. Her parents decided to give her $15 for that purpose, and her grandparents twice as much as her parents. How much more money does Betty need to buy the wallet?\nA: In the beginning, Betty has only half of the money she needs, which is 100 / 2 = $50. Her grandparents gave her twice as much as her parents, so they gave her 15 * 2 = $30. Now that she got $15 from her parents and $30 from her grandparents, she will need $100 - $15 - $30 = $55. Since she already has $50, she needs $55 - $50 = $5 more. The answer is 5.\n\nGiven the following problem, reason and give a final answer to the problem. Your response should end with \"The answer is [answer]\" where [answer] is the response to the problem.\nQ: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages and today, she read twice as many pages as yesterday. If she wants to read half of the remaining pages tomorrow, how many pages should she read?\nA: Julie read twice as many pages as yesterday, so she read 12 * 2 = 24 pages today. Since yesterday, Julie read 12 + 24 = 36 pages. So, there are 120 - 36 = 84 pages left to be read. Since she wants to read half of the remaining pages, she should read 84 / 2 = 42 pages. The answer is 42.\n\n"""
-
     prefix = """Q: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?\nA: Natalia sold 48 clips in April and half as many clips in May, so she sold 48 / 2 = 24 clips in May. Altogether, she sold 48 + 24 = 72 clips. The answer is 72.\n\nQ: Weng earns $12 an hour for babysitting. Yesterday, she just did 50 minutes of babysitting. How much did she earn?\nA: Since Weng earns $12 an hour for babysitting, she earns $12 / 60 = $0.2 per minute. Working 50 minutes, she earned $0.2 x 50 = $10. The answer is 10.\n\nQ: Betty is saving money for a new wallet which costs $100. Betty has only half of the money she needs. Her parents decided to give her $15 for that purpose, and her grandparents twice as much as her parents. How much more money does Betty need to buy the wallet?\nA: In the beginning, Betty has only half of the money she needs, which is 100 / 2 = $50. Her grandparents gave her twice as much as her parents, so they gave her 15 * 2 = $30. Now that she got $15 from her parents and $30 from her grandparents, she will need $100 - $15 - $30 = $55. Since she already has $50, she needs $55 - $50 = $5 more. The answer is 5.\n\nQ: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages and today, she read twice as many pages as yesterday. If she wants to read half of the remaining pages tomorrow, how many pages should she read?\nA: Julie read twice as many pages as yesterday, so she read 12 * 2 = 24 pages today. Since yesterday, Julie read 12 + 24 = 36 pages. So, there are 120 - 36 = 84 pages left to be read. Since she wants to read half of the remaining pages, she should read 84 / 2 = 42 pages. The answer is 42.\n\n"""
 
     if n_samples:
@@ -258,11 +301,12 @@ def run_cot_benchmark(dataset,
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2 or sys.argv[1] not in ['cot', 'rap']:
-        print("Usage: python3 benchmark.py [cot|rap] [start_index]")
+        print("Usage: python3 benchmark.py [cot|rap] [start_index] [--aggregate]")
         sys.exit(1)
 
-    # Get start index if provided
+    # Get start index and aggregate flag
     start_idx = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+    use_aggregate = "--aggregate" in sys.argv
 
     # Load model components
     home_dir = os.path.expanduser("~")
