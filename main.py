@@ -158,7 +158,7 @@ def get_confidence_state(action: str,
                          tokenizer: Tokenizer,
                          transformer_weights: TransformerWeights,
                          model_params: ModelParams,
-                         batch_size: int = 2) -> Tuple[torch.Tensor, float]:
+                         batch_size: int = 5) -> Tuple[torch.Tensor, float]:
     """
     Get confidence state by adaptively sampling until we find a clear winner.
     """

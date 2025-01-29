@@ -1,7 +1,8 @@
 import json
 import time
 import os
-from typing import Dict
+from typing import Dict, Tuple
+from collections import defaultdict
 
 import torch
 from datasets import load_dataset
@@ -9,9 +10,8 @@ from tqdm import tqdm
 
 from config import ModelParams
 from main import Tokenizer, generate, load_model_params, load_weights
-from mcts import mcts
+from mcts import mcts, MCTSNode
 from world_model import State
-from aggregate import aggregate
 
 def extract_answer(answer_text: str) -> float:
     """Extract numerical answer from the text."""
@@ -118,6 +118,7 @@ def run_benchmark(dataset,
 
                 # Print appropriate progress info
                 print(f"\nQuestion {idx}")
+                print(f"Target: {target}")
                 print(f"MCTS - pred: {mcts_pred}, correct: {is_correct_mcts}")
                 if use_aggregate:
                     print(f"Aggregation - pred: {agg_pred}, correct: {is_correct_agg}")
@@ -298,6 +299,79 @@ def run_cot_benchmark(dataset,
 
     return {'accuracy': accuracy, 'correct': correct, 'total': total, 'results': results, 'last_index': idx}
 
+def aggregate(root: MCTSNode, answer: float) -> Tuple[str, bool, float, float]:
+    """
+    Aggregate results from a completed MCTS tree.
+    Args:
+        root: The root node of the completed MCTS tree
+        answer: The ground truth answer to validate against
+    Returns:
+        output: The predicted answer string
+        correct: Whether prediction matches ground truth 
+        reward: The aggregated reward
+        confidence: Confidence score (reward/total_reward)
+    """
+    answer_dict = defaultdict(float)
+
+    def visit(cur: MCTSNode) -> list[Tuple[Tuple[str, bool], int]]:
+        # Skip unvisited or negative reward nodes
+        if not cur.visits or cur.reward < 0:
+            return []
+
+        # For terminal nodes, check answer and add weighted reward
+        if cur.is_terminal():
+            if not cur.state or not cur.state.states:
+                return []
+            # Get answer from final state
+            pred = extract_answer(cur.state.states[-1].subanswer)
+            if pred is None:
+                return []
+            
+            correct = abs(pred - answer) < 1e-6
+            
+            # Calculate depth
+            depth = 0
+            node = cur
+            while node.parent:
+                depth += 1
+                node = node.parent
+            
+            # Store tuple of (prediction string, correctness)
+            key = (str(pred), correct)
+            answer_dict[key] += cur.reward / depth
+            return [(key, depth)]
+
+        # Process children and their depths
+        depth_dict = defaultdict(list)
+        results = []
+        for child in cur.children:
+            child_results = visit(child)
+            results.extend(child_results)
+            for key, depth in child_results:
+                depth_dict[key].append(depth)
+
+        # Add weighted rewards from this node
+        for key, depths in depth_dict.items():
+            answer_dict[key] += cur.reward * len(depths) / sum(depths)
+            
+        return results
+
+    # Traverse tree
+    visit(root)
+
+    if not answer_dict:
+        return '', False, -10, 0
+
+    # Sort by aggregated rewards
+    answer_reward_list = sorted(answer_dict.items(), key=lambda x: x[1], reverse=True)
+    (pred_str, is_correct), reward = answer_reward_list[0]
+    
+    # Calculate confidence as portion of total reward
+    reward_sum = sum(x[1] for x in answer_reward_list)
+    confidence = reward / reward_sum if reward_sum > 0 else 0
+
+    return pred_str, is_correct, reward, confidence
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2 or sys.argv[1] not in ['cot', 'rap']:
@@ -321,13 +395,13 @@ if __name__ == "__main__":
 
     if sys.argv[1] == 'cot':
         print(f"Running Chain of Thought benchmark starting from index {start_idx}...")
-        max_iterations = 3
+        max_iterations = 5
         results = run_cot_benchmark(dataset=test_dataset,
                                     tokenizer=tokenizer,
                                     transformer_weights=transformer_weights,
                                     max_iterations=max_iterations,
                                     model_params=model_params,
-                                    n_samples=100,
+                                    n_samples=500,
                                     start_idx=start_idx)
         output_file = f'gsm8k_cot_results_start:{start_idx}_iterations:{max_iterations}.json'
     else:  # rap
@@ -342,7 +416,7 @@ if __name__ == "__main__":
                                 n_samples=100,
                                 rollouts=rollouts,
                                 depth_limit=6,
-                                confidence=1,
+                                confidence=5,
                                 action_generation=3,
                                 start_idx=start_idx)
         output_file = f'gsm8k_rap_results_start:{start_idx}_rollouts:{rollouts}.json'

@@ -1,6 +1,8 @@
 from collections import defaultdict
 from typing import Tuple
 
+from mcts import MCTSNode
+
 def aggregate(root: MCTSNode, answer: str) -> Tuple[str, bool, float, float]:
     """
     Aggregate results from a completed MCTS tree.
@@ -66,3 +68,19 @@ def aggregate(root: MCTSNode, answer: str) -> Tuple[str, bool, float, float]:
     confidence = reward / reward_sum if reward_sum > 0 else 0
 
     return output, correct, reward, confidence
+
+def judge_answer_gsm8k(pred: str, target: str) -> bool:
+    """
+    Judge if predicted answer matches target for GSM8k problems
+    Args:
+        pred: Predicted answer string
+        target: Target answer string
+    Returns:
+        bool: Whether prediction is correct
+    """
+    try:
+        pred_num = float(pred)
+        target_num = float(target)
+        return abs(pred_num - target_num) < 1e-6
+    except (ValueError, TypeError):
+        return False

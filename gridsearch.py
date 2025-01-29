@@ -101,7 +101,8 @@ def run_grid_search(test_dataset,
                 action_generation=param_dict['action_generation'],
                 confidence=param_dict['confidence'],
                 start_idx=start_idx,
-                prefix=current_prompt  # Use the actual prompt text
+                prefix=current_prompt,  # Use the actual prompt text
+                use_aggregate=True
             )
 
             # Save individual result
@@ -134,7 +135,7 @@ def run_grid_search(test_dataset,
 if __name__ == "__main__":
     # Load model components
     home_dir = os.path.expanduser("~")
-    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B-Instruct")
+    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B")
     model_params = load_model_params(os.path.join(model_path, "params.json"))
     transformer_weights = load_weights(os.path.join(model_path, "consolidated.00.pth"))
     tokenizer = Tokenizer(model_path=os.path.join(model_path, "tokenizer.model"))
@@ -144,7 +145,7 @@ if __name__ == "__main__":
     test_dataset = dataset['test']
 
     # Define parameter grid
-    param_grid = {'rollouts': [1], 'depth_limit': [6], 'action_generation': [1], 'confidence': [1]}
+    param_grid = {'rollouts': [3, 5, 7], 'depth_limit': [6], 'action_generation': [4], 'confidence': [5]}
 
     # Run grid search
     results = run_grid_search(
@@ -153,7 +154,7 @@ if __name__ == "__main__":
         transformer_weights=transformer_weights,
         model_params=model_params,
         param_grid=param_grid,
-        n_samples=100,  # Adjust as needed
+        n_samples=500,  # Adjust as needed
         start_idx=0,
         output_dir='rap_grid_search_results')
 
