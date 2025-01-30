@@ -4,10 +4,10 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 
-from config import ModelParams, load_model_params
+from config import ModelParams
 from model import KVCache, transformer
 from tokenizer import Tokenizer
-from weights import TransformerWeights, load_weights
+from weights import TransformerWeights
 
 MAX_SEQ_LEN = 8192
 
@@ -209,8 +209,6 @@ def get_confidence_state(action: str,
 def get_self_eval(reasoning: Union[str, List[str]], tokenizer: Tokenizer, transformer_weights: TransformerWeights,
                   model_params: ModelParams) -> List[float]:
     yes_probs = []
-    if "Question 5:" in reasoning[0]: useful = json.load(open('prompts.json'))['useful']['prompt']
-    else: useful = json.load(open('prompts.json'))['useful_unnumbered']['prompt']
     useful = json.load(open('prompts.json'))['useful_noprompt']['prompt']
     for r in reasoning:
         prompt = f"{useful} {r}\nIs the new question useful?"
