@@ -1,18 +1,19 @@
 import json
-import time
 import os
-from typing import Dict, Optional, List, Tuple
-from dataclasses import dataclass
+import time
 from collections import defaultdict
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
 import torch
 from datasets import load_dataset
 from tqdm import tqdm
 
-from config import ModelParams
-from main import Tokenizer, generate, load_model_params, load_weights
-from mcts import mcts
-from weights import TransformerWeights
+from config import ModelParams, load_model_params
+from main import generate
+from mcts import MCTSNode, mcts
+from tokenizer import Tokenizer
+from weights import load_weights
 from world_model import State
 
 @dataclass
@@ -57,19 +58,92 @@ def write_trace(trace_file: str, idx: int, question: str, target: float, **kwarg
             print(f"{key}: {value}", file=f)
         print("=" * 50 + "\n", file=f)
 
+def aggregate(root: MCTSNode, answer: float) -> Tuple[str, bool, float, float]:
+    """
+    Aggregate results from a completed MCTS tree.
+    
+    Args:
+        root: The root node of the completed MCTS tree
+        answer: The ground truth answer to validate against
+    
+    Returns:
+        output: The predicted answer string
+        correct: Whether prediction matches ground truth 
+        reward: The aggregated reward
+        confidence: Confidence score (reward/total_reward)
+    """
+    answer_dict = defaultdict(float)
+
+    def visit(cur: MCTSNode) -> list[Tuple[Tuple[str, bool], int]]:
+        # Skip unvisited or negative reward nodes
+        if not cur.visits or cur.reward < 0:
+            return []
+
+        # For terminal nodes, check answer and add weighted reward
+        if cur.is_terminal():
+            if not cur.state or not cur.state.states:
+                return []
+            # Get answer from final state
+            pred = extract_answer(cur.state.states[-1].subanswer)
+            if pred is None:
+                return []
+
+            correct = abs(float(pred) - answer) < 1e-6
+
+            # Calculate depth
+            depth = 0
+            node = cur
+            while node.parent:
+                depth += 1
+                node = node.parent
+
+            # Store tuple of (prediction string, correctness)
+            key = (str(pred), correct)
+            answer_dict[key] += cur.reward / depth
+            return [(key, depth)]
+
+        # Process children and their depths
+        depth_dict = defaultdict(list)
+        results = []
+        for child in cur.children:
+            child_results = visit(child)
+            results.extend(child_results)
+            for key, depth in child_results:
+                depth_dict[key].append(depth)
+
+        # Add weighted rewards from this node
+        for key, depths in depth_dict.items():
+            answer_dict[key] += cur.reward * len(depths) / sum(depths)
+
+        return results
+
+    # Traverse tree
+    visit(root)
+
+    if not answer_dict:
+        return '', False, -10, 0
+
+    # Sort by aggregated rewards
+    answer_reward_list = sorted(answer_dict.items(), key=lambda x: x[1], reverse=True)
+    (pred_str, is_correct), reward = answer_reward_list[0]
+
+    # Calculate confidence as portion of total reward
+    reward_sum = sum(x[1] for x in answer_reward_list)
+    confidence = reward / reward_sum if reward_sum > 0 else 0
+
+    return pred_str, is_correct, reward, confidence
+
 class ModelRunner:
     """Class to handle model interactions"""
-    def __init__(self, tokenizer: Tokenizer, weights: TransformerWeights, params: ModelParams):
+    def __init__(self, tokenizer: Tokenizer, weights: dict, params: ModelParams):
         self.tokenizer = tokenizer
         self.weights = weights
         self.params = params
 
-    def generate_response(self, prompt: str, temperature: float = 0.8) -> str:
+    def generate_response(self, prompt: str, temperature: float = 0.9) -> str:
         tokens = self.tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")
         tokens = torch.tensor([tokens]).cuda()
-        output_tokens = generate(self.weights, self.params, tokens, 
-                               self.tokenizer, temperature=temperature, 
-                               max_gen_len=2048)
+        output_tokens = generate(self.weights, self.params, tokens, self.tokenizer, temperature=temperature, max_gen_len=2048)
         return self.tokenizer.decode(output_tokens[0].tolist())
 
 class BenchmarkRunner:
@@ -88,10 +162,15 @@ class BenchmarkRunner:
 
 class MCTSBenchmark(BenchmarkRunner):
     """MCTS-specific benchmark implementation"""
-    def run(self, prefix: str, rollouts: int = 10, depth_limit: int = 5,
-            confidence: int = 1, action_generation: int = 5, 
-            trace_file: str = "mcts_trace.txt", use_aggregate: bool = False) -> BenchmarkResult:
-        
+    def run(self,
+            prefix: str,
+            rollouts: int = 10,
+            depth_limit: int = 5,
+            confidence: int = 1,
+            action_generation: int = 5,
+            trace_file: str = "mcts_trace.txt",
+            use_aggregate: bool = False) -> BenchmarkResult:
+
         correct_mcts = correct_agg = total = 0
         results = []
         start_time = time.time()
@@ -102,40 +181,51 @@ class MCTSBenchmark(BenchmarkRunner):
                 continue
 
             write_trace(trace_file, idx, example['question'], target)
-            
+
             try:
-                result = self._process_example(example, target, prefix, rollouts, 
-                                            depth_limit, action_generation, confidence,
-                                            use_aggregate)
-                
+                result = self._process_example(example, target, prefix, rollouts, depth_limit, action_generation, confidence, use_aggregate)
+
                 if result:
                     results.append(result)
                     correct_mcts += int(result.get('mcts_correct', False))
                     correct_agg += int(result.get('aggregate_correct', False))
                     total += 1
 
+                    print(f"\nQuestion {idx}")
+                    print(f"Target: {target}")
+                    print(f"MCTS - pred: {result.get('mcts_prediction')}, correct: {result.get('mcts_correct')}")
+                    if use_aggregate:
+                        print(f"Aggregation - pred: {result.get('aggregate_prediction')}, correct: {result.get('aggregate_correct')}")
+                    print(f"Running accuracy - MCTS: {correct_mcts/total:.2%}", end="")
+                    if use_aggregate:
+                        print(f", Aggregation: {correct_agg/total:.2%}")
+                    else:
+                        print()
+
             except Exception as e:
-                print(f"\nError processing example {idx}: {str(e)}")
+                print(f"\nDetailed error for example {idx}:")
+                print(f"  Question: {example['question'][:100]}...")
+                print(f"  Error type: {type(e).__name__}")
+                print(f"  Error message: {str(e)}")
+                print(f"  Stack trace:")
+                import traceback
+                traceback.print_exc()
                 continue
 
-        return BenchmarkResult(
-            accuracy=correct_mcts / total if total > 0 else 0,
-            correct=correct_mcts,
-            total=total,
-            results=results,
-            last_index=idx,
-            total_time_seconds=time.time() - start_time,
-            aggregate_accuracy=correct_agg / total if use_aggregate and total > 0 else None,
-            aggregate_correct=correct_agg if use_aggregate else None
-        )
+        return BenchmarkResult(accuracy=correct_mcts / total if total > 0 else 0,
+                               correct=correct_mcts,
+                               total=total,
+                               results=results,
+                               last_index=idx,
+                               total_time_seconds=time.time() - start_time,
+                               aggregate_accuracy=correct_agg / total if use_aggregate and total > 0 else None,
+                               aggregate_correct=correct_agg if use_aggregate else None)
 
-    def _process_example(self, example: Dict, target: float, prefix: str, 
-                        rollouts: int, depth_limit: int, action_generation: int,
-                        confidence: int, use_aggregate: bool) -> Optional[Dict]:
+    def _process_example(self, example: Dict, target: float, prefix: str, rollouts: int, depth_limit: int, action_generation: int, confidence: int,
+                         use_aggregate: bool) -> Optional[Dict]:
         init_state = State(states=[], prefix=prefix, question=example['question'])
-        final_state, root = mcts(init_state, rollouts, depth_limit, action_generation,
-                               self.model_runner.tokenizer, self.model_runner.weights,
-                               self.model_runner.params, confidence)
+        final_state, root = mcts(init_state, rollouts, depth_limit, action_generation, self.model_runner.tokenizer, self.model_runner.weights,
+                                 self.model_runner.params, confidence)
 
         if not final_state or not final_state.states:
             return None
@@ -152,8 +242,7 @@ class MCTSBenchmark(BenchmarkRunner):
             result.update({
                 'mcts_prediction': mcts_pred,
                 'mcts_correct': abs(mcts_pred - target) < 1e-6,
-                'mcts_steps': [f"{state.subquestion}\n{state.subanswer}" 
-                             for state in final_state.states]
+                'mcts_steps': [f"{state.subquestion}\n{state.subanswer}" for state in final_state.states]
             })
 
         # Process aggregate results if requested
@@ -169,90 +258,6 @@ class MCTSBenchmark(BenchmarkRunner):
 
         return result
 
-class ChainOfThoughtBenchmark(BenchmarkRunner):
-    """Chain of thought specific benchmark implementation"""
-    def run(self, max_iterations: int = 10, 
-            trace_file: str = "cot_trace.txt") -> BenchmarkResult:
-        
-        correct = total = 0
-        results = []
-
-        for idx, example in tqdm(enumerate(self.dataset, start=self.start_idx)):
-            target = parse_target(example)
-            if target is None:
-                continue
-
-            write_trace(trace_file, idx, example['question'], target)
-
-            try:
-                result = self._process_example(example, target, max_iterations)
-                if result:
-                    results.append(result)
-                    correct += int(result['final_correct'])
-                    total += 1
-
-            except Exception as e:
-                print(f"\nError processing example {idx}: {str(e)}")
-                continue
-
-        return BenchmarkResult(
-            accuracy=correct / total if total > 0 else 0,
-            correct=correct,
-            total=total,
-            results=results,
-            last_index=idx
-        )
-
-    def _process_example(self, example: Dict, target: float, 
-                        max_iterations: int) -> Optional[Dict]:
-        predictions = []
-        all_attempts = []
-        
-        for attempt in range(max_iterations):
-            try:
-                response = self._generate_attempt(example['question'], attempt)
-                pred = extract_answer(response)
-                
-                if pred is not None:
-                    predictions.append(pred)
-                    all_attempts.append({
-                        'attempt_number': attempt + 1,
-                        'reasoning': response,
-                        'predicted': pred,
-                    })
-                    
-            except Exception as e:
-                print(f"Error in attempt {attempt + 1}: {str(e)}")
-                all_attempts.append({
-                    'attempt_number': attempt + 1,
-                    'error': str(e)
-                })
-
-        if not predictions:
-            return None
-
-        majority_pred = max(set(predictions), key=predictions.count)
-        is_correct = abs(majority_pred - target) < 1e-6
-
-        return {
-            'index': example.get('id', -1),
-            'question': example['question'],
-            'target': target,
-            'attempts': all_attempts,
-            'predictions': predictions,
-            'majority_prediction': majority_pred,
-            'final_correct': is_correct
-        }
-
-    def _generate_attempt(self, question: str, attempt: int) -> str:
-        prompt = self._get_prompt() + question + "\nA: "
-        response = self.model_runner.generate_response(prompt)
-        return response.split(prompt)[-1].strip()
-
-    def _get_prompt(self) -> str:
-        # Return the prompt template - moved to a separate method for clarity
-        return """Q: [Example questions and answers...]\n\n"""  # Add your actual prompt template here
-
 def main():
     if len(sys.argv) < 2 or sys.argv[1] not in ['cot', 'rap']:
         print("Usage: python3 benchmark.py [cot|rap] [start_index] [--aggregate]")
@@ -264,30 +269,19 @@ def main():
     # Initialize model
     home_dir = os.path.expanduser("~")
     model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B")
-    model_runner = ModelRunner(
-        tokenizer=Tokenizer(model_path=os.path.join(model_path, "tokenizer.model")),
-        weights=load_weights(os.path.join(model_path, "consolidated.00.pth")),
-        params=load_model_params(os.path.join(model_path, "params.json"))
-    )
+    model_runner = ModelRunner(tokenizer=Tokenizer(model_path=os.path.join(model_path, "tokenizer.model")),
+                               weights=load_weights(os.path.join(model_path, "consolidated.00.pth")),
+                               params=load_model_params(os.path.join(model_path, "params.json")))
 
     # Load dataset
     dataset = load_dataset("openai/gsm8k", "main")['test']
-
-    if sys.argv[1] == 'cot':
-        benchmark = ChainOfThoughtBenchmark(dataset, model_runner, start_idx)
-        benchmark.prepare_dataset(n_samples=500)
-        results = benchmark.run(max_iterations=5)
-        output_file = f'gsm8k_cot_results_start:{start_idx}_iterations:5.json'
-    else:
-        benchmark = MCTSBenchmark(dataset, model_runner, start_idx)
-        benchmark.prepare_dataset(n_samples=100)
-        prefix = json.load(open('prompts.json'))['repeated']['prompt']
-        results = benchmark.run(prefix=prefix, rollouts=3, depth_limit=6,
-                              confidence=5, action_generation=3,
-                              use_aggregate=use_aggregate)
-        output_file = f'gsm8k_rap_results_start:{start_idx}_rollouts:3.json'
+    benchmark = MCTSBenchmark(dataset, model_runner, start_idx)
+    benchmark.prepare_dataset(n_samples=50)
+    prefix = json.load(open('prompts.json'))['repeated']['prompt']
+    results = benchmark.run(prefix=prefix, rollouts=1, depth_limit=6, confidence=1, action_generation=1, use_aggregate=use_aggregate)
 
     # Save results
+    output_file = f'gsm8k_rap_results_start:{start_idx}_rollouts:3.json'
     with open(output_file, 'w') as f:
         json.dump(vars(results), f, indent=2)
 

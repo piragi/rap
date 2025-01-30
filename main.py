@@ -201,6 +201,7 @@ def get_confidence_state(action: str,
                 break
 
     if not answers:
+        print(text)
         return None, 0.0
     most_common_answer, count = counter.most_common(1)[0]
     confidence = count / len(answers)
@@ -211,7 +212,7 @@ def get_self_eval(reasoning: Union[str, List[str]], tokenizer: Tokenizer, transf
     yes_probs = []
     useful = json.load(open('prompts.json'))['useful_noprompt']['prompt']
     for r in reasoning:
-        prompt = f"{useful} {r}\nIs the new question useful?"
+        prompt = f"{useful}\n{r}\nIs the new question useful? "
         tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")], dtype=torch.long, device=device)
 
         seqlen = tokens.shape[1]
@@ -240,8 +241,8 @@ def get_self_eval(reasoning: Union[str, List[str]], tokenizer: Tokenizer, transf
             attention_mask=attn_mask,
         )
 
-        yes_token = tokenizer.encode("Yes", bos=False, eos=False, allowed_special="all")[0]
-        no_token = tokenizer.encode("No", bos=False, eos=False, allowed_special="all")[0]
+        yes_token = tokenizer.encode(" Yes", bos=False, eos=False, allowed_special="all")[0]
+        no_token = tokenizer.encode(" No", bos=False, eos=False, allowed_special="all")[0]
 
         batch_logits = logits[:, -1][:, [yes_token, no_token]]
         probs = torch.softmax(batch_logits, dim=-1)
