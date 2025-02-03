@@ -11,6 +11,7 @@ from tqdm import tqdm
 from config import ModelParams, load_model_params
 from main import generate
 from mcts import mcts
+from token_tracker import TokenUsageStats
 from tokenizer import Tokenizer
 from weights import load_weights
 from world_model import State
@@ -26,6 +27,7 @@ class BenchmarkResult:
     total_time_seconds: Optional[float] = None
     aggregate_accuracy: Optional[float] = None
     aggregate_correct: Optional[int] = None
+    token_stats: Optional[Dict] = None
 
 def extract_answer(answer_text: str) -> Optional[float]:
     """Extract numerical answer from text."""
@@ -76,6 +78,7 @@ class BenchmarkRunner:
         self.dataset = dataset
         self.model_runner = model_runner
         self.start_idx = start_idx
+        self.token_stats = TokenUsageStats()
 
     def prepare_dataset(self, n_samples: Optional[int]) -> None:
         if n_samples and n_samples > 0:
@@ -100,6 +103,7 @@ class MCTSBenchmark(BenchmarkRunner):
         start_time = time.time()
 
         for idx, example in tqdm(enumerate(self.dataset, start=self.start_idx)):
+            self.token_stats.start_new_run()
             target = parse_target(example)
             if target is None:
                 continue
@@ -143,13 +147,14 @@ class MCTSBenchmark(BenchmarkRunner):
                                last_index=idx,
                                total_time_seconds=time.time() - start_time,
                                aggregate_accuracy=correct_agg / total if use_aggregate and total > 0 else None,
-                               aggregate_correct=correct_agg if use_aggregate else None)
+                               aggregate_correct=correct_agg if use_aggregate else None,
+                               token_stats=self.token_stats.get_stats())
 
     def _process_example(self, example: Dict, target: float, prefix: str, rollouts: int, depth_limit: int, action_generation: int, confidence: int,
                          use_aggregate: bool) -> Optional[Dict]:
         init_state = State(states=[], prefix=prefix, question=example['question'])
         final_state, root = mcts(init_state, rollouts, depth_limit, action_generation, self.model_runner.tokenizer, self.model_runner.weights,
-                                 self.model_runner.params, confidence)
+                                 self.model_runner.params, confidence, token_stats=self.token_stats)
 
         if not final_state or not final_state.states:
             return None

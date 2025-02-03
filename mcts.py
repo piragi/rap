@@ -10,6 +10,7 @@ from config import ModelParams
 from tokenizer import Tokenizer
 from weights import TransformerWeights
 from world_model import Action, State, predict_action, predict_state
+from token_tracker import TokenUsageStats
 
 W_EXP = 1.
 
@@ -60,7 +61,7 @@ def select_node(node: MCTSNode) -> list[MCTSNode]:
             else (child.max_reward + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
 
 def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
-               model_params: ModelParams, confidence: int) -> list[MCTSNode]:
+               model_params: ModelParams, confidence: int, token_stats: Optional[TokenUsageStats] = None) -> list[MCTSNode]:
     path = []
     current_node = node
 
@@ -69,7 +70,7 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
             path.append(current_node)
         if current_node.state is None:
             current_node.state = predict_state(current_node.parent.state, current_node.action, tokenizer, transformer_weights, model_params,
-                                               confidence)
+                                               confidence, token_stats=token_stats)
             current_node.reward = calculate_reward(current_node.fast_reward, current_node.state.states[-1].confidence)
         if current_node.is_terminal():
             break
@@ -81,7 +82,7 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
                 current_node.children.append(MCTSNode(state=None, action=original_question, parent=current_node, reward=0., fast_reward=fast_reward))
             else:
                 # Generate all actions at once
-                actions_with_rewards = predict_action(current_node.state, tokenizer, transformer_weights, model_params, action_generation)
+                actions_with_rewards = predict_action(current_node.state, tokenizer, transformer_weights, model_params, action_generation, token_stats=token_stats)
                 # Create children nodes
                 for action, fast_reward in actions_with_rewards:
                     current_node.children.append(MCTSNode(state=None, action=action, parent=current_node, reward=0., fast_reward=fast_reward))
@@ -122,12 +123,12 @@ def get_highest_reward_path(root: MCTSNode) -> tuple[float, list[MCTSNode]]:
     return dfs([root])
 
 def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
-         model_params: ModelParams, confidence: int) -> tuple[State, MCTSNode]:
+         model_params: ModelParams, confidence: int, token_stats: Optional[TokenUsageStats] = None) -> tuple[State, MCTSNode]:
     root = MCTSNode(init_state, init_state.question, None, 0., 0.)
     for _ in range(rollouts):
         path = select_node(root)
         last_node = path.pop()
-        simulation_path = simulation(last_node, depth_limit - len(path), action_generation, tokenizer, transformer_weights, model_params, confidence)
+        simulation_path = simulation(last_node, depth_limit - len(path), action_generation, tokenizer, transformer_weights, model_params, confidence, token_stats=token_stats)
         path.extend(simulation_path)
         backpropagation(path)
 
