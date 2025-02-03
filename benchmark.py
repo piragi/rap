@@ -153,11 +153,21 @@ class MCTSBenchmark(BenchmarkRunner):
     def _process_example(self, example: Dict, target: float, prefix: str, rollouts: int, depth_limit: int, action_generation: int, confidence: int,
                          use_aggregate: bool) -> Optional[Dict]:
         init_state = State(states=[], prefix=prefix, question=example['question'])
-        final_state, root = mcts(init_state, rollouts, depth_limit, action_generation, self.model_runner.tokenizer, self.model_runner.weights,
-                                 self.model_runner.params, confidence, token_stats=self.token_stats)
+        final_state, root = mcts(init_state,
+                                 rollouts,
+                                 depth_limit,
+                                 action_generation,
+                                 self.model_runner.tokenizer,
+                                 self.model_runner.weights,
+                                 self.model_runner.params,
+                                 confidence,
+                                 token_stats=self.token_stats)
 
         if not final_state or not final_state.states:
+            self.token_stats.discard_run()  # Discard tokens from failed run
             return None
+
+        self.token_stats.commit_run()
 
         result = {
             'index': example.get('id', -1),
@@ -205,12 +215,12 @@ def main():
     # Load dataset
     dataset = load_dataset("openai/gsm8k", "main")['test']
     benchmark = MCTSBenchmark(dataset, model_runner, start_idx)
-    benchmark.prepare_dataset(n_samples=50)
+    benchmark.prepare_dataset(n_samples=10)
     prefix = json.load(open('prompts.json'))['repeated']['prompt']
     results = benchmark.run(prefix=prefix, rollouts=1, depth_limit=6, confidence=1, action_generation=1, use_aggregate=use_aggregate)
 
     # Save results
-    output_file = f'gsm8k_rap_results_start:{start_idx}_rollouts:3.json'
+    output_file = f'gsm8k_benchmark.json'
     with open(output_file, 'w') as f:
         json.dump(vars(results), f, indent=2)
 
