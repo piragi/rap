@@ -8,6 +8,7 @@ import torch
 from datasets import load_dataset
 from tqdm import tqdm
 
+from aggregate import aggregate
 from config import ModelParams, load_model_params
 from main import generate
 from mcts import mcts
@@ -66,10 +67,21 @@ class ModelRunner:
         self.weights = weights
         self.params = params
 
-    def generate_response(self, prompt: str, temperature: float = 0.9) -> str:
+    def generate_response(self,
+                          prompt: str,
+                          temperature: float = 0.9,
+                          token_stats: Optional[TokenUsageStats] = None,
+                          track_method: Optional[str] = None) -> str:
         tokens = self.tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")
         tokens = torch.tensor([tokens]).cuda()
-        output_tokens = generate(self.weights, self.params, tokens, self.tokenizer, temperature=temperature, max_gen_len=2048)
+        output_tokens = generate(self.weights,
+                                 self.params,
+                                 tokens,
+                                 self.tokenizer,
+                                 temperature=temperature,
+                                 max_gen_len=2048,
+                                 token_stats=token_stats,
+                                 track_method=track_method)
         return self.tokenizer.decode(output_tokens[0].tolist())
 
 class BenchmarkRunner:
@@ -100,6 +112,7 @@ class MCTSBenchmark(BenchmarkRunner):
 
         correct_mcts = correct_agg = total = 0
         results = []
+        self.token_stats = TokenUsageStats()
         start_time = time.time()
 
         for idx, example in tqdm(enumerate(self.dataset, start=self.start_idx)):
@@ -197,14 +210,140 @@ class MCTSBenchmark(BenchmarkRunner):
 
         return result
 
+class CoTBenchmark(BenchmarkRunner):
+    """Chain of Thought benchmark implementation"""
+    def run(self, max_iterations: int = 10, trace_file: str = "cot_trace.txt") -> BenchmarkResult:
+        """
+        Run chain of thought benchmark with multiple attempts per question
+        Args:
+            max_iterations: Maximum number of attempts per question
+            trace_file: File to write traces to
+        Returns:
+            BenchmarkResult containing accuracy and detailed results
+        """
+        correct = total = 0
+        results = []
+        start_time = time.time()
+
+        # Standard CoT prefix with examples
+        prefix = """Q: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?\nA: Natalia sold 48 clips in April and half as many clips in May, so she sold 48 / 2 = 24 clips in May. Altogether, she sold 48 + 24 = 72 clips. The answer is 72.\n\nQ: Weng earns $12 an hour for babysitting. Yesterday, she just did 50 minutes of babysitting. How much did she earn?\nA: Since Weng earns $12 an hour for babysitting, she earns $12 / 60 = $0.2 per minute. Working 50 minutes, she earned $0.2 x 50 = $10. The answer is 10.\n\nQ: Betty is saving money for a new wallet which costs $100. Betty has only half of the money she needs. Her parents decided to give her $15 for that purpose, and her grandparents twice as much as her parents. How much more money does Betty need to buy the wallet?\nA: In the beginning, Betty has only half of the money she needs, which is 100 / 2 = $50. Her grandparents gave her twice as much as her parents, so they gave her 15 * 2 = $30. Now that she got $15 from her parents and $30 from her grandparents, she will need $100 - $15 - $30 = $55. Since she already has $50, she needs $55 - $50 = $5 more. The answer is 5.\n\nQ: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages and today, she read twice as many pages as yesterday. If she wants to read half of the remaining pages tomorrow, how many pages should she read?\nA: Julie read twice as many pages as yesterday, so she read 12 * 2 = 24 pages today. Since yesterday, Julie read 12 + 24 = 36 pages. So, there are 120 - 36 = 84 pages left to be read. Since she wants to read half of the remaining pages, she should read 84 / 2 = 42 pages. The answer is 42.\n\n"""
+
+        for idx, example in tqdm(enumerate(self.dataset, start=self.start_idx)):
+            self.token_stats.start_new_run()
+            target = parse_target(example)
+            if target is None:
+                continue
+
+            write_trace(trace_file, idx, example['question'], target)
+
+            try:
+                result = self._process_example(example, target, prefix, max_iterations, trace_file)
+
+                if result:
+                    results.append(result)
+                    correct += int(result['final_correct'])
+                    total += 1
+
+                    print(f"\nQuestion {idx} - Running accuracy: {correct/total:.2%} ({correct}/{total})")
+                    print(f"Predictions: {result['predictions']}")
+                    print(f"Majority vote: {result['majority_prediction']}, Success: {result['final_correct']}")
+
+                self.token_stats.commit_run()
+
+            except Exception as e:
+                print(f"\nDetailed error for example {idx}:")
+                print(f"  Question: {example['question'][:100]}...")
+                print(f"  Error type: {type(e).__name__}")
+                print(f"  Error message: {str(e)}")
+                print(f"  Stack trace:")
+                import traceback
+                traceback.print_exc()
+                self.token_stats.discard_run()
+                continue
+
+        return BenchmarkResult(accuracy=correct / total if total > 0 else 0,
+                               correct=correct,
+                               total=total,
+                               results=results,
+                               last_index=idx,
+                               total_time_seconds=time.time() - start_time,
+                               token_stats=self.token_stats.get_stats())
+
+    def _process_example(self, example: Dict, target: float, prefix: str, max_iterations: int, trace_file: str) -> Optional[Dict]:
+        """Process a single example with multiple attempts"""
+
+        prompt = prefix + example['question'] + "\nA: "
+        predictions = []
+        all_attempts = []
+
+        # Make multiple attempts
+        for attempt in range(max_iterations):
+            try:
+                # Generate response
+                reasoning = self.model_runner.generate_response(prompt, temperature=0.8, token_stats=self.token_stats, track_method='cot')
+                reasoning = reasoning.split(prompt)[-1].strip()
+
+                # Extract predicted answer
+                pred = extract_answer(reasoning)
+
+                if pred is not None:
+                    predictions.append(pred)
+                    attempt_result = {
+                        'attempt_number': attempt + 1,
+                        'reasoning': reasoning,
+                        'predicted': pred,
+                    }
+                    all_attempts.append(attempt_result)
+
+                    # Write trace
+                    with open(trace_file, 'a') as f:
+                        print(f"Attempt {attempt + 1}:", file=f)
+                        print(f"Model reasoning:\n{reasoning}\n", file=f)
+                        print(f"Predicted: {pred}\n", file=f)
+
+            except Exception as e:
+                print(f"\nError in model generation, attempt {attempt + 1}: {str(e)}")
+                all_attempts.append({'attempt_number': attempt + 1, 'error': str(e)})
+                continue
+
+        # Determine majority vote if we have any valid predictions
+        if predictions:
+            prediction_counts = Counter(predictions)
+            majority_pred = prediction_counts.most_common(1)[0][0]
+            is_correct = abs(majority_pred - target) < 1e-6
+
+            # Write majority vote results to trace
+            with open(trace_file, 'a') as f:
+                print("Majority Vote Results:", file=f)
+                print(f"All predictions: {predictions}", file=f)
+                print(f"Prediction counts: {dict(prediction_counts)}", file=f)
+                print(f"Selected prediction: {majority_pred}", file=f)
+                print(f"Correct: {is_correct}\n", file=f)
+        else:
+            is_correct = False
+            majority_pred = None
+
+        return {
+            'index': example.get('id', -1),
+            'question': example['question'],
+            'target': target,
+            'attempts': all_attempts,
+            'predictions': predictions,
+            'majority_prediction': majority_pred,
+            'final_correct': is_correct
+        }
+
 def main():
+    # Parse command line arguments
     if len(sys.argv) < 2 or sys.argv[1] not in ['cot', 'rap']:
         print("Usage: python3 benchmark.py [cot|rap] [start_index] [--aggregate]")
         sys.exit(1)
 
+    benchmark_type = sys.argv[1]
     start_idx = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     use_aggregate = "--aggregate" in sys.argv
 
+    n_samples = 1000
     # Initialize model
     home_dir = os.path.expanduser("~")
     model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B")
@@ -214,18 +353,53 @@ def main():
 
     # Load dataset
     dataset = load_dataset("openai/gsm8k", "main")['test']
-    benchmark = MCTSBenchmark(dataset, model_runner, start_idx)
-    benchmark.prepare_dataset(n_samples=10)
-    prefix = json.load(open('prompts.json'))['repeated']['prompt']
-    results = benchmark.run(prefix=prefix, rollouts=1, depth_limit=6, confidence=1, action_generation=1, use_aggregate=use_aggregate)
+
+    # Initialize appropriate benchmark
+    if benchmark_type == 'cot':
+        print(f"Running Chain of Thought benchmark...")
+        print(f"Start index: {start_idx}")
+        print(f"Number of samples: {n_samples}")
+
+        benchmark = CoTBenchmark(dataset, model_runner, start_idx)
+        benchmark.prepare_dataset(n_samples=n_samples)
+
+        results = benchmark.run(max_iterations=3, trace_file=f"cot_trace_{start_idx}.txt")
+        output_file = f'gsm8k_cot_results_start{start_idx}_samples{n_samples}.json'
+
+    else:  # rap
+        print(f"Running Reasoning via Planning (RAP) benchmark...")
+        print(f"Start index: {start_idx}")
+        print(f"Number of samples: {n_samples}")
+        print(f"Aggregation enabled: {use_aggregate}")
+
+        benchmark = MCTSBenchmark(dataset, model_runner, start_idx)
+        benchmark.prepare_dataset(n_samples=n_samples)
+
+        # Load RAP-specific parameters
+        prefix = json.load(open('prompts.json'))['repeated']['prompt']
+
+        results = benchmark.run(prefix=prefix,
+                                rollouts=3,
+                                depth_limit=6,
+                                confidence=5,
+                                action_generation=3,
+                                trace_file=f"rap_trace_{start_idx}.txt",
+                                use_aggregate=use_aggregate)
+        output_file = f'gsm8k_rap_results_start{start_idx}_samples{n_samples}.json'
 
     # Save results
-    output_file = f'gsm8k_benchmark.json'
     with open(output_file, 'w') as f:
         json.dump(vars(results), f, indent=2)
 
-    print(f"\nFinal accuracy: {results.accuracy:.2%}")
+    # Print summary
+    print("\nBenchmark Summary:")
+    print(f"Type: {benchmark_type.upper()}")
+    print(f"Samples processed: {results.total}")
+    print(f"Final accuracy: {results.accuracy:.2%}")
+    if benchmark_type == 'rap' and use_aggregate:
+        print(f"Aggregation accuracy: {results.aggregate_accuracy:.2%}")
     print(f"Last processed index: {results.last_index}")
+    print(f"Results saved to: {output_file}")
 
 if __name__ == "__main__":
     import sys

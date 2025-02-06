@@ -3,8 +3,8 @@ set -e  # Exit on any error
 
 # Configuration - replace these values
 REPO_URL="https://github.com/piragi/rap.git"
-META_URL="https://llama3-2-lightweight.llamameta.net/*?Policy=eyJTdGF0ZW1lbnQiOlt7InVuaXF1ZV9oYXNoIjoianZyc3pkaW9zaXJ5anpyZHB2NHFiNGkyIiwiUmVzb3VyY2UiOiJodHRwczpcL1wvbGxhbWEzLTItbGlnaHR3ZWlnaHQubGxhbWFtZXRhLm5ldFwvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTczNjUzMzQ0OH19fV19&Signature=plrv8cYZHMbatxrkyJeI8uzegKVBj6RvixOgxQidtlrr6kKpZj7zxhwFCmTk04PlmMgGZOHAwFQuTUsnPZ0YsE2hgQjLa4rc2Dv9ACagvgNpbhmSnLBE9bqj3452a6V-weNKSqdfsyGGiYn1rkqsbrsHr6N1cCUBf-OMMdRb4b3D%7EcKkbVM8dwsmUo2bmNJSYWHTYsli3Z8tkedEgkCti5XI9NbIN5EOcP1dYTRXVFJPoiboEAeuQfi2sbx2RX66UsuG1-Wtg3p9QG5X0vXKsl5yNe6-4ncDxpHvN5UKTmEDlbDGxldfvfrJGzthtMYLMnJl4YIwjttsax260IcKbw__&Key-Pair-Id=K15QRJLYKIFSLZ&Download-Request-ID=954820303247478"  # The temporary URL from Meta
-ENV_NAME="env"  # Name of the virtual environment
+META_URL="https://llama3-2-lightweight.llamameta.net/*?Policy=eyJTdGF0ZW1lbnQiOlt7InVuaXF1ZV9oYXNoIjoicDR2YXBiaXU5Y2lodTAyeGFyZDA4OWtpIiwiUmVzb3VyY2UiOiJodHRwczpcL1wvbGxhbWEzLTItbGlnaHR3ZWlnaHQubGxhbWFtZXRhLm5ldFwvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTczODgzNzYwN319fV19&Signature=GF2Yr%7EP3SEj%7E4dG8OYo0Hor7kNIXKowieSdkXgHR46MGt5dbKT3ffa53QklGYOkeCE7sGtMKXli8vYj5fNJHOvb6-h%7E0Z4AWOc%7ES-nDe6RLlviil6JqLt7H3ls4mPlKcxNjRUVZ1-zPXdrX8MgrM0AmH88dvrKN3th5NoiL5zZ9cEC6XR4Sga9Gbj%7E9Fmc5YTSkN3LM1nREmB5aFpUynRAOCarmLt-M1Vly5Ba32KEwlajPeUH9-YNun9Fbd2OhUpLzireIA%7Enuq31ZLfg7ZLxTx9uiadmje9CmbTuScSJhjvtMFDPBVssyhEZQV2jKoNepOAGcYJ19-aMCAAJKqwQ__&Key-Pair-Id=K15QRJLYKIFSLZ&Download-Request-ID=9011235728967933"  # The temporary URL from Meta
+ENV_NAME=".venv"  # Name of the virtual environment
 
 echo "Starting setup process..."
 
@@ -14,7 +14,6 @@ apt-get update && apt-get install -y git wget python3-venv python3-pip
 
 # Create and activate virtual environment
 echo "Creating and activating virtual environment..."
-python3 -m venv ~/$ENV_NAME
 source ~/$ENV_NAME/bin/activate
 
 # Verify we're in the virtual environment

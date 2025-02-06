@@ -143,10 +143,10 @@ def main():
     grid_search = GridSearchRunner(benchmark, output_dir='rap_grid_search_results')
 
     # Define parameter grid
-    param_grid = {'rollouts': [3, 5, 7], 'depth_limit': [6], 'action_generation': [4], 'confidence': [5]}
+    param_grid = {'rollouts': [1], 'depth_limit': [6], 'action_generation': [4], 'confidence': [5]}
 
     # Run grid search
-    results = grid_search.run(param_grid, n_samples=500)
+    results = grid_search.run(param_grid, n_samples=1000)
 
     # Get and print best parameters
     best_params = grid_search.get_best_parameters(results)
