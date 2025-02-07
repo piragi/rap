@@ -17,11 +17,13 @@ class TokenUsageStats:
 
     # Buffer for current run
     buffer: Dict[str, List[int]] = field(default_factory=lambda: defaultdict(list))
+    cot_buffer: List[int] = field(default_factory=list)
 
     def start_new_run(self):
         """Start tracking a new MCTS run"""
         # Clear the buffer for the new run
         self.buffer.clear()
+        self.cot_buffer.clear()
         self.current_run += 1
 
     def add_generate_action(self, count: int):
@@ -33,8 +35,8 @@ class TokenUsageStats:
         self.buffer['generate_state'].append(count)
 
     def add_cot(self, count: int):
-        """CoT can be added directly as it's not part of MCTS"""
-        self.cot_tokens.append(count)
+        """Add to CoT buffer instead of directly to stats"""
+        self.cot_buffer.append(count)
 
     def commit_run(self):
         """Commit the buffered tokens to the actual stats"""
@@ -49,6 +51,15 @@ class TokenUsageStats:
 
             # Clear buffer
             self.buffer.clear()
+
+        if self.cot_buffer:
+            # Sum up all CoT attempts for this run into a single value
+            total_cot_tokens = sum(self.cot_buffer)
+            self.cot_tokens.append(total_cot_tokens)
+            # Add to runs tracking
+            self.runs[self.current_run]['cot'] = [total_cot_tokens]
+            # Clear CoT buffer
+            self.cot_buffer.clear()
 
     def discard_run(self):
         """Discard the buffered tokens from a failed run"""

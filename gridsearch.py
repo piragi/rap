@@ -75,7 +75,7 @@ class GridSearchRunner:
                                                       depth_limit=param_dict['depth_limit'],
                                                       action_generation=param_dict['action_generation'],
                                                       confidence=param_dict['confidence'],
-                                                      use_aggregate=True)
+                                                      use_aggregate=False)
 
                 # Store results
                 results[param_str] = GridSearchResult(parameters=param_dict, benchmark_result=benchmark_result)
@@ -143,7 +143,7 @@ def main():
     grid_search = GridSearchRunner(benchmark, output_dir='rap_grid_search_results')
 
     # Define parameter grid
-    param_grid = {'rollouts': [1], 'depth_limit': [6], 'action_generation': [4], 'confidence': [5]}
+    param_grid = {'rollouts': [1], 'depth_limit': [6], 'action_generation': [1], 'confidence': [1]}
 
     # Run grid search
     results = grid_search.run(param_grid, n_samples=1000)

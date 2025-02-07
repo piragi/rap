@@ -1,16 +1,16 @@
 import json
 import os
 import time
+from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
-import torch
 from datasets import load_dataset
 from tqdm import tqdm
 
 from aggregate import aggregate
 from config import ModelParams, load_model_params
-from main import generate
+from main import generate, prepare_tokens
 from mcts import mcts
 from token_tracker import TokenUsageStats
 from tokenizer import Tokenizer
@@ -34,8 +34,10 @@ def extract_answer(answer_text: str) -> Optional[float]:
     """Extract numerical answer from text."""
     try:
         if "The answer is" in answer_text:
-            answer_str = answer_text.split("The answer is")[-1].strip().strip('.')
+            answer_str = answer_text.split("The answer is")[-1].strip().rstrip('.')
             answer_str = ''.join(c for c in answer_str if c.isdigit() or c == '.' or c == '-')
+            answer_str = answer_str.rstrip('.')
+            print(answer_str)
             return float(answer_str)
     except:
         pass
@@ -68,21 +70,37 @@ class ModelRunner:
         self.params = params
 
     def generate_response(self,
-                          prompt: str,
+                          prompts: Union[str, List[str]],
                           temperature: float = 0.9,
                           token_stats: Optional[TokenUsageStats] = None,
-                          track_method: Optional[str] = None) -> str:
-        tokens = self.tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")
-        tokens = torch.tensor([tokens]).cuda()
+                          track_method: Optional[str] = None) -> Union[str, List[str]]:
+        """Generate responses for one or multiple prompts"""
+        if isinstance(prompts, str):
+            prompts = [prompts]
+            is_single = True
+        else:
+            is_single = False
+
+        # Use prepare_tokens helper for consistent batching
+        batched_tokens = prepare_tokens(prompts, self.tokenizer)
+        input_length = batched_tokens.size(1)
+
         output_tokens = generate(self.weights,
                                  self.params,
-                                 tokens,
+                                 batched_tokens,
                                  self.tokenizer,
                                  temperature=temperature,
-                                 max_gen_len=2048,
+                                 max_gen_len=input_length + 200,
                                  token_stats=token_stats,
                                  track_method=track_method)
-        return self.tokenizer.decode(output_tokens[0].tolist())
+
+        # Decode complete sequences
+        outputs = []
+        for tokens in output_tokens:
+            text = self.tokenizer.decode(tokens.tolist())
+            outputs.append(text)
+
+        return outputs[0] if is_single else outputs
 
 class BenchmarkRunner:
     """Base class for running benchmarks"""
@@ -211,16 +229,8 @@ class MCTSBenchmark(BenchmarkRunner):
         return result
 
 class CoTBenchmark(BenchmarkRunner):
-    """Chain of Thought benchmark implementation"""
-    def run(self, max_iterations: int = 10, trace_file: str = "cot_trace.txt") -> BenchmarkResult:
-        """
-        Run chain of thought benchmark with multiple attempts per question
-        Args:
-            max_iterations: Maximum number of attempts per question
-            trace_file: File to write traces to
-        Returns:
-            BenchmarkResult containing accuracy and detailed results
-        """
+    """Chain of Thought benchmark implementation with batched iterations"""
+    def run(self, max_iterations: int = 10, batch_size: int = 1, trace_file: str = "cot_trace.txt") -> BenchmarkResult:
         correct = total = 0
         results = []
         start_time = time.time()
@@ -237,7 +247,7 @@ class CoTBenchmark(BenchmarkRunner):
             write_trace(trace_file, idx, example['question'], target)
 
             try:
-                result = self._process_example(example, target, prefix, max_iterations, trace_file)
+                result = self._process_example(example, target, prefix, max_iterations, batch_size, trace_file)
 
                 if result:
                     results.append(result)
@@ -269,41 +279,47 @@ class CoTBenchmark(BenchmarkRunner):
                                total_time_seconds=time.time() - start_time,
                                token_stats=self.token_stats.get_stats())
 
-    def _process_example(self, example: Dict, target: float, prefix: str, max_iterations: int, trace_file: str) -> Optional[Dict]:
-        """Process a single example with multiple attempts"""
-
+    def _process_example(self, example: Dict, target: float, prefix: str, max_iterations: int, batch_size: int, trace_file: str) -> Optional[Dict]:
+        """Process a single example with batched attempts"""
         prompt = prefix + example['question'] + "\nA: "
         predictions = []
         all_attempts = []
 
-        # Make multiple attempts
-        for attempt in range(max_iterations):
+        # Process iterations in batches
+        for i in range(0, max_iterations, batch_size):
+            curr_batch_size = min(batch_size, max_iterations - i)
             try:
-                # Generate response
-                reasoning = self.model_runner.generate_response(prompt, temperature=0.8, token_stats=self.token_stats, track_method='cot')
-                reasoning = reasoning.split(prompt)[-1].strip()
+                # Generate batch_size responses at once
+                reasonings = self.model_runner.generate_response([prompt] * curr_batch_size,
+                                                                 temperature=0.8,
+                                                                 token_stats=self.token_stats,
+                                                                 track_method='cot')
 
-                # Extract predicted answer
-                pred = extract_answer(reasoning)
+                # Process each response in batch
+                for j, reasoning in enumerate(reasonings):
+                    attempt = i + j + 1
+                    reasoning = reasoning.split(prompt)[-1].strip()
+                    pred = extract_answer(reasoning)
 
-                if pred is not None:
-                    predictions.append(pred)
-                    attempt_result = {
-                        'attempt_number': attempt + 1,
-                        'reasoning': reasoning,
-                        'predicted': pred,
-                    }
-                    all_attempts.append(attempt_result)
+                    if pred is not None:
+                        predictions.append(pred)
+                        attempt_result = {
+                            'attempt_number': attempt,
+                            'reasoning': reasoning,
+                            'predicted': pred,
+                        }
+                        all_attempts.append(attempt_result)
 
-                    # Write trace
-                    with open(trace_file, 'a') as f:
-                        print(f"Attempt {attempt + 1}:", file=f)
-                        print(f"Model reasoning:\n{reasoning}\n", file=f)
-                        print(f"Predicted: {pred}\n", file=f)
+                        # Write trace
+                        with open(trace_file, 'a') as f:
+                            print(f"Attempt {attempt}:", file=f)
+                            print(f"Model reasoning:\n{reasoning}\n", file=f)
+                            print(f"Predicted: {pred}\n", file=f)
 
             except Exception as e:
-                print(f"\nError in model generation, attempt {attempt + 1}: {str(e)}")
-                all_attempts.append({'attempt_number': attempt + 1, 'error': str(e)})
+                print(f"\nError in model generation, batch starting at attempt {i + 1}: {str(e)}")
+                for j in range(curr_batch_size):
+                    all_attempts.append({'attempt_number': i + j + 1, 'error': str(e)})
                 continue
 
         # Determine majority vote if we have any valid predictions
@@ -363,8 +379,9 @@ def main():
         benchmark = CoTBenchmark(dataset, model_runner, start_idx)
         benchmark.prepare_dataset(n_samples=n_samples)
 
-        results = benchmark.run(max_iterations=3, trace_file=f"cot_trace_{start_idx}.txt")
-        output_file = f'gsm8k_cot_results_start{start_idx}_samples{n_samples}.json'
+        max_iteration = 5
+        results = benchmark.run(max_iterations=max_iteration, trace_file=f"cot_trace_{start_idx}.txt", batch_size=7)
+        output_file = f'gsm8k_cot_iterations{max_iteration}_results_start{start_idx}_samples{n_samples}.json'
 
     else:  # rap
         print(f"Running Reasoning via Planning (RAP) benchmark...")
@@ -379,10 +396,10 @@ def main():
         prefix = json.load(open('prompts.json'))['repeated']['prompt']
 
         results = benchmark.run(prefix=prefix,
-                                rollouts=3,
+                                rollouts=1,
                                 depth_limit=6,
-                                confidence=5,
-                                action_generation=3,
+                                confidence=1,
+                                action_generation=1,
                                 trace_file=f"rap_trace_{start_idx}.txt",
                                 use_aggregate=use_aggregate)
         output_file = f'gsm8k_rap_results_start{start_idx}_samples{n_samples}.json'
