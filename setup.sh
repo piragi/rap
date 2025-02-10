@@ -13,8 +13,8 @@ apt-get update && apt-get install -y git wget python3-venv python3-pip
 
 # Create and activate virtual environment
 echo "Creating and activating virtual environment..."
-python3 -m venv ~/$ENV_NAME
-source ~/$ENV_NAME/bin/activate
+python3 -m venv ./$ENV_NAME
+source ./$ENV_NAME/bin/activate
 
 # Verify we're in the virtual environment
 if [ -z "$VIRTUAL_ENV" ]; then

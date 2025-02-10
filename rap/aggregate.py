@@ -1,7 +1,8 @@
 from collections import defaultdict
 from typing import Tuple
 
-from mcts import MCTSNode, extract_answer
+from rap.mcts import MCTSNode, extract_answer
+
 
 def aggregate(root: MCTSNode, answer: float) -> Tuple[str, bool, float, float]:
     """

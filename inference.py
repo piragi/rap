@@ -235,7 +235,7 @@ def get_self_eval(reasoning: Union[str, List[str]],
                   model_params: ModelParams,
                   token_stats: Optional[TokenUsageStats] = None) -> List[float]:
     yes_probs = []
-    useful = json.load(open('prompts.json'))['useful_noprompt']['prompt']
+    useful = json.load(open('rap/prompts.json'))['useful_noprompt']['prompt']
     for r in reasoning:
         prompt = f"{useful}\n{r}\nIs the new question useful? "
         tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")], dtype=torch.long, device=device)

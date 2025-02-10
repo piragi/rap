@@ -8,14 +8,15 @@ from typing import Dict, List, Optional, Union
 from datasets import load_dataset
 from tqdm import tqdm
 
-from rap.aggregate import aggregate
 from config import ModelParams, load_model_params
 from inference import generate, prepare_tokens
+from rap.aggregate import aggregate
 from rap.mcts import mcts
+from rap.world_model import State
 from token_tracker import TokenUsageStats
 from tokenizer import Tokenizer
 from weights import load_weights
-from rap.world_model import State
+
 
 @dataclass
 class BenchmarkResult:
@@ -383,10 +384,10 @@ class CoTBenchmark(BenchmarkRunner):
 
 @dataclass
 class BenchmarkConfig:
-    n_samples: int = 1000
-    model_path: str = "~/.llama/checkpoints/Llama3.2-3B"
-    max_iteration: int = 5
-    batched_iterations: int = 5
+    n_samples: int = 10
+    model_path: str = os.path.expanduser("~/.llama/checkpoints/Llama3.2-3B")
+    max_iteration: int = 1
+    batched_iterations: int = 1
     rollouts: int = 1
     depth_limit: int = 6
     confidence: int = 1
@@ -446,7 +447,7 @@ def main():
         benchmark.prepare_dataset(n_samples=config.n_samples)
 
         # Load RAP-specific parameters
-        prefix = json.load(open('prompts.json'))['repeated']['prompt']
+        prefix = json.load(open('rap/prompts.json'))['repeated']['prompt']
 
         results = benchmark.run(prefix=prefix,
                                 rollouts=config.rollouts,
