@@ -6,7 +6,6 @@ This repository contains a reproduction study of the RAP (Reasoning via Planning
 
 - Successfully reproduced RAP's enhanced reasoning capabilities over Chain-of-Thought baselines
 - Identified significant computational overhead: RAP requires 12-20x more tokens per iteration
-- Found RAP's optimal use case to be in high-compute environments where breaking through performance plateaus takes precedence over efficiency
 
 ## Requirements
 
