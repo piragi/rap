@@ -2,6 +2,8 @@
 
 This repository contains a reproduction study of the RAP (Reasoning via Planning) framework, focusing on its practical applicability in open-ended mathematical reasoning. The study examines RAP's performance on the GSM8K benchmark and provides detailed analysis of its computational requirements compared to Chain-of-Thought baselines.
 
+Our complete findings are available in the [technical report](https://piragi.github.io/papers/rap-reproduction.pdf).
+
 ## Key Findings
 
 - Successfully reproduced RAP's enhanced reasoning capabilities over Chain-of-Thought baselines
