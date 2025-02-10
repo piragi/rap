@@ -349,23 +349,32 @@ class CoTBenchmark(BenchmarkRunner):
             'final_correct': is_correct
         }
 
+@dataclass
+class BenchmarkConfig:
+    n_samples: int = 1000
+    model_path: str = "~/.llama/checkpoints/Llama3.2-3B"
+    max_iteration: int = 5
+    batched_iterations: int = 5
+    rollouts: int = 1
+    depth_limit: int = 6
+    confidence: int = 1
+    action_generation: int = 1
+    use_aggregate: bool = False
+
 def main():
     # Parse command line arguments
     if len(sys.argv) < 2 or sys.argv[1] not in ['cot', 'rap']:
-        print("Usage: python3 benchmark.py [cot|rap] [start_index] [--aggregate]")
+        print("Usage: python3 benchmark.py [cot|rap] [start_index]")
         sys.exit(1)
 
     benchmark_type = sys.argv[1]
     start_idx = int(sys.argv[2]) if len(sys.argv) > 2 else 0
-    use_aggregate = "--aggregate" in sys.argv
 
-    n_samples = 1000
     # Initialize model
-    home_dir = os.path.expanduser("~")
-    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B")
-    model_runner = ModelRunner(tokenizer=Tokenizer(model_path=os.path.join(model_path, "tokenizer.model")),
-                               weights=load_weights(os.path.join(model_path, "consolidated.00.pth")),
-                               params=load_model_params(os.path.join(model_path, "params.json")))
+    config = BenchmarkConfig()
+    model_runner = ModelRunner(tokenizer=Tokenizer(model_path=os.path.join(config.model_path, "tokenizer.model")),
+                               weights=load_weights(os.path.join(config.model_path, "consolidated.00.pth")),
+                               params=load_model_params(os.path.join(config.model_path, "params.json")))
 
     # Load dataset
     dataset = load_dataset("openai/gsm8k", "main")['test']
@@ -374,35 +383,34 @@ def main():
     if benchmark_type == 'cot':
         print(f"Running Chain of Thought benchmark...")
         print(f"Start index: {start_idx}")
-        print(f"Number of samples: {n_samples}")
+        print(f"Number of samples: {config.n_samples}")
 
         benchmark = CoTBenchmark(dataset, model_runner, start_idx)
-        benchmark.prepare_dataset(n_samples=n_samples)
+        benchmark.prepare_dataset(n_samples=config.n_samples)
 
-        max_iteration = 5
-        results = benchmark.run(max_iterations=max_iteration, trace_file=f"cot_trace_{start_idx}.txt", batch_size=7)
-        output_file = f'gsm8k_cot_iterations{max_iteration}_results_start{start_idx}_samples{n_samples}.json'
+        results = benchmark.run(max_iterations=config.max_iteration, trace_file=f"cot_trace_{start_idx}.txt", batch_size=config.batched_iterations)
+        output_file = f'gsm8k_cot_iterations{config.max_iteration}_results_start{start_idx}_samples{config.n_samples}.json'
 
     else:  # rap
         print(f"Running Reasoning via Planning (RAP) benchmark...")
         print(f"Start index: {start_idx}")
-        print(f"Number of samples: {n_samples}")
-        print(f"Aggregation enabled: {use_aggregate}")
+        print(f"Number of samples: {config.n_samples}")
+        print(f"Aggregation enabled: {config.use_aggregate}")
 
         benchmark = MCTSBenchmark(dataset, model_runner, start_idx)
-        benchmark.prepare_dataset(n_samples=n_samples)
+        benchmark.prepare_dataset(n_samples=config.n_samples)
 
         # Load RAP-specific parameters
         prefix = json.load(open('prompts.json'))['repeated']['prompt']
 
         results = benchmark.run(prefix=prefix,
-                                rollouts=1,
-                                depth_limit=6,
-                                confidence=1,
-                                action_generation=1,
+                                rollouts=config.rollouts,
+                                depth_limit=config.depth_limit,
+                                confidence=config.confidence,
+                                action_generation=config.action_generation,
                                 trace_file=f"rap_trace_{start_idx}.txt",
-                                use_aggregate=use_aggregate)
-        output_file = f'gsm8k_rap_results_start{start_idx}_samples{n_samples}.json'
+                                use_aggregate=config.use_aggregate)
+        output_file = f'gsm8k_rap_results_start{start_idx}_samples{config.n_samples}.json'
 
     # Save results
     with open(output_file, 'w') as f:
@@ -413,7 +421,7 @@ def main():
     print(f"Type: {benchmark_type.upper()}")
     print(f"Samples processed: {results.total}")
     print(f"Final accuracy: {results.accuracy:.2%}")
-    if benchmark_type == 'rap' and use_aggregate:
+    if benchmark_type == 'rap' and config.use_aggregate:
         print(f"Aggregation accuracy: {results.aggregate_accuracy:.2%}")
     print(f"Last processed index: {results.last_index}")
     print(f"Results saved to: {output_file}")
