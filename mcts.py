@@ -13,6 +13,22 @@ from world_model import Action, State, predict_action, predict_state
 W_EXP = 1.
 
 class MCTSNode:
+    """A node in the Monte Carlo Tree Search.
+    
+    Represents a state in the search tree, tracking visits, rewards, and maintaining 
+    parent-child relationships. Each node corresponds to a step in the reasoning process.
+    
+    Attributes:
+        state: Current state of reasoning
+        action: Action that led to this state
+        parent: Parent node in the tree
+        visits: Number of times this node has been visited
+        reward: Actual reward received at this node
+        fast_reward: Initial reward estimate before full evaluation
+        children: List of child nodes
+        cum_rewards: Cumulative rewards for different paths
+        max_reward: Maximum reward seen through this node
+    """
     def __init__(self, state: Optional[State], action: Action, parent: Optional['MCTSNode'], reward: float, fast_reward: float):
         self.state = state
         self.action = action
@@ -44,6 +60,17 @@ def calculate_reward(self_eval: float, confidence: float, alpha: float = 0.5) ->
     return math.pow(self_eval, alpha) * math.pow(confidence, 1 - alpha)
 
 def select_node(node: MCTSNode) -> list[MCTSNode]:
+    """Select a promising node to expand using UCT selection.
+    
+    Traverses the tree from root to leaf using Upper Confidence Bound (UCT)
+    formula to balance exploration and exploitation.
+    
+    Args:
+        node: Starting node for selection
+        
+    Returns:
+        Path of nodes from root to selected leaf
+    """
     path = []
     while True:
         path.append(node)
@@ -66,6 +93,24 @@ def simulation(node: MCTSNode,
                model_params: ModelParams,
                confidence: int,
                token_stats: Optional[TokenUsageStats] = None) -> list[MCTSNode]:
+    """Simulate a rollout from the given node to a terminal state or depth limit.
+    
+    Expands the tree and simulates a possible solution path, generating new actions
+    and evaluating states along the way.
+    
+    Args:
+        node: Starting node for simulation
+        depth_limit: Maximum simulation depth
+        action_generation: Number of actions to generate per step
+        tokenizer: Tokenizer for model interactions
+        transformer_weights: Model weights
+        model_params: Model parameters
+        confidence: Confidence threshold
+        token_stats: Optional token usage tracker
+        
+    Returns:
+        Path of nodes visited during simulation
+    """
     path = []
     current_node = node
 
@@ -107,6 +152,17 @@ def simulation(node: MCTSNode,
     return path
 
 def backpropagation(path: list[MCTSNode]) -> float:
+    """Update node statistics along the simulation path.
+    
+    Propagates rewards back up the tree and updates visit counts and maximum
+    rewards for each node in the path.
+    
+    Args:
+        path: List of nodes visited during simulation
+        
+    Returns:
+        Total reward accumulated along the path
+    """
     reward = 0
     for node in reversed(path):
         node.visits += 1
@@ -145,6 +201,25 @@ def mcts(init_state: State,
          model_params: ModelParams,
          confidence: int,
          token_stats: Optional[TokenUsageStats] = None) -> tuple[State, MCTSNode]:
+    """Execute Monte Carlo Tree Search to solve a math problem.
+    
+    Performs iterative search through possible reasoning steps to find the best path
+    to solving the given math problem.
+    
+    Args:
+        init_state: Initial problem state
+        rollouts: Number of MCTS iterations to perform
+        depth_limit: Maximum depth of the search tree
+        action_generation: Number of candidate actions to generate at each step
+        tokenizer: Tokenizer for model interactions
+        transformer_weights: Model weights
+        model_params: Model parameters
+        confidence: Confidence threshold for predictions
+        token_stats: Optional token usage tracker
+        
+    Returns:
+        Tuple of (final state, root node) containing the best solution path
+    """
     root = MCTSNode(init_state, init_state.question, None, 0., 0.)
     for _ in range(rollouts):
         path = select_node(root)

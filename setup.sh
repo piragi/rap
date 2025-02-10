@@ -3,7 +3,7 @@ set -e  # Exit on any error
 
 # Configuration - replace these values
 REPO_URL="https://github.com/piragi/rap.git"
-META_URL="https://llama3-2-lightweight.llamameta.net/*?Policy=eyJTdGF0ZW1lbnQiOlt7InVuaXF1ZV9oYXNoIjoicDR2YXBiaXU5Y2lodTAyeGFyZDA4OWtpIiwiUmVzb3VyY2UiOiJodHRwczpcL1wvbGxhbWEzLTItbGlnaHR3ZWlnaHQubGxhbWFtZXRhLm5ldFwvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTczODgzNzYwN319fV19&Signature=GF2Yr%7EP3SEj%7E4dG8OYo0Hor7kNIXKowieSdkXgHR46MGt5dbKT3ffa53QklGYOkeCE7sGtMKXli8vYj5fNJHOvb6-h%7E0Z4AWOc%7ES-nDe6RLlviil6JqLt7H3ls4mPlKcxNjRUVZ1-zPXdrX8MgrM0AmH88dvrKN3th5NoiL5zZ9cEC6XR4Sga9Gbj%7E9Fmc5YTSkN3LM1nREmB5aFpUynRAOCarmLt-M1Vly5Ba32KEwlajPeUH9-YNun9Fbd2OhUpLzireIA%7Enuq31ZLfg7ZLxTx9uiadmje9CmbTuScSJhjvtMFDPBVssyhEZQV2jKoNepOAGcYJ19-aMCAAJKqwQ__&Key-Pair-Id=K15QRJLYKIFSLZ&Download-Request-ID=9011235728967933"  # The temporary URL from Meta
+META_URL=""  # The temporary URL from Meta
 ENV_NAME=".venv"  # Name of the virtual environment
 
 echo "Starting setup process..."
@@ -14,6 +14,7 @@ apt-get update && apt-get install -y git wget python3-venv python3-pip
 
 # Create and activate virtual environment
 echo "Creating and activating virtual environment..."
+python3 -m venv ~/$ENV_NAME
 source ~/$ENV_NAME/bin/activate
 
 # Verify we're in the virtual environment

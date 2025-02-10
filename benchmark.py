@@ -71,10 +71,23 @@ class ModelRunner:
 
     def generate_response(self,
                           prompts: Union[str, List[str]],
-                          temperature: float = 0.9,
+                          temperature: float = 0.8,
                           token_stats: Optional[TokenUsageStats] = None,
                           track_method: Optional[str] = None) -> Union[str, List[str]]:
-        """Generate responses for one or multiple prompts"""
+        """Generate model responses for one or multiple prompts.
+        
+        Handles batching, token preparation, and generation of responses from the model.
+        Optionally tracks token usage statistics.
+        
+        Args:
+            prompts: Single prompt string or list of prompts
+            temperature: Sampling temperature for generation
+            token_stats: Optional tracker for token usage
+            track_method: Method name for token tracking
+            
+        Returns:
+            Single string response if input was string, list of responses if input was list
+        """
         if isinstance(prompts, str):
             prompts = [prompts]
             is_single = True
@@ -183,6 +196,25 @@ class MCTSBenchmark(BenchmarkRunner):
 
     def _process_example(self, example: Dict, target: float, prefix: str, rollouts: int, depth_limit: int, action_generation: int, confidence: int,
                          use_aggregate: bool) -> Optional[Dict]:
+        """Process a single example using Monte Carlo Tree Search.
+        
+        Performs MCTS to break down and solve the math problem, optionally
+        aggregating results across multiple search paths.
+        
+        Args:
+            example: The problem example containing question and answer
+            target: The target numerical answer
+            prefix: Prompt prefix for MCTS
+            rollouts: Number of MCTS rollouts
+            depth_limit: Maximum MCTS tree depth
+            action_generation: Number of candidate actions per step
+            confidence: MCTS exploration parameter
+            use_aggregate: Whether to aggregate answers across paths
+            
+        Returns:
+            Dict containing predictions, correctness, and step-by-step reasoning,
+            or None if processing failed
+        """
         init_state = State(states=[], prefix=prefix, question=example['question'])
         final_state, root = mcts(init_state,
                                  rollouts,
@@ -362,6 +394,19 @@ class BenchmarkConfig:
     use_aggregate: bool = False
 
 def main():
+    """Main entry point for the benchmark script.
+    
+    Handles command line arguments to run either Chain of Thought (CoT) or 
+    Reasoning via Planning (RAP) benchmarks on the GSM8K dataset.
+    
+    Command line args:
+        benchmark_type: Either 'cot' or 'rap'
+        start_index: Optional starting index in dataset (default: 0)
+    
+    The script loads model and dataset, runs the specified benchmark,
+    and saves detailed results to a JSON file. Configuration parameters
+    are handled via the BenchmarkConfig dataclass.
+    """
     # Parse command line arguments
     if len(sys.argv) < 2 or sys.argv[1] not in ['cot', 'rap']:
         print("Usage: python3 benchmark.py [cot|rap] [start_index]")
