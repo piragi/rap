@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from aggregate import aggregate
 from config import ModelParams, load_model_params
-from main import generate, prepare_tokens
+from inference import generate, prepare_tokens
 from mcts import mcts
 from token_tracker import TokenUsageStats
 from tokenizer import Tokenizer

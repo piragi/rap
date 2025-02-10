@@ -3,7 +3,7 @@ from typing import List, NamedTuple, Tuple, Optional
 import torch
 
 from config import ModelParams
-from main import generate, get_confidence_state, get_self_eval
+from inference import generate, get_confidence_state, get_self_eval
 from tokenizer import Tokenizer
 from weights import TransformerWeights
 from token_tracker import TokenUsageStats

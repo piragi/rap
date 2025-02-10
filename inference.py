@@ -161,8 +161,22 @@ def get_confidence_state(action: str,
                          model_params: ModelParams,
                          batch_size: int = 5,
                          token_stats: Optional[TokenUsageStats] = None) -> Tuple[torch.Tensor, float]:
-    """
-    Get confidence state by adaptively sampling until we find a clear winner.
+    """Get model's confidence in generated answers through adaptive sampling.
+    
+    Samples multiple completions and returns the most consistent answer along
+    with a confidence score based on agreement between samples.
+    
+    Args:
+        action: The prompt to generate completions for
+        max_samples: Maximum number of samples to generate
+        tokenizer: Tokenizer for encoding/decoding
+        transformer_weights: Model weights
+        model_params: Model parameters
+        batch_size: Number of parallel samples per batch
+        token_stats: Optional token usage tracker
+        
+    Returns:
+        Tuple of (tokens for most common answer, confidence score)
     """
     answers = []
     tokens_map = {}
@@ -291,9 +305,24 @@ def generate(
     track_method: Optional[str] = None,
     token_stats: Optional[TokenUsageStats] = None,
 ) -> torch.Tensor:
-    """
-    Generate tokens from an input tensor.
-    Assumes tokens is already properly batched and padded if needed.
+    """Generate text using autoregressive sampling.
+    
+    Core generation function that handles batched token generation with caching,
+    temperature sampling, and optional token tracking.
+    
+    Args:
+        transformer_weights: Model weights
+        model_params: Model configuration parameters
+        tokens: Input token tensor of shape (batch_size, seq_len)
+        tokenizer: Tokenizer for encoding/decoding
+        temperature: Sampling temperature (higher = more random)
+        top_p: Nucleus sampling threshold
+        max_gen_len: Maximum number of tokens to generate
+        track_method: Optional method name for token tracking
+        token_stats: Optional token usage statistics tracker
+        
+    Returns:
+        Tensor of generated tokens of shape (batch_size, seq_len + generated_len)
     """
     tokens = tokens.to(device)
     bsz, seqlen = tokens.shape
