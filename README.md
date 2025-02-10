@@ -38,7 +38,7 @@ The setup script will:
 
 4. After setup, activate the environment:
 ```bash
-source ~/activate_env.sh
+source ./.venv/bin/activate
 ```
 
 ## Running Benchmarks
