@@ -8,7 +8,7 @@ from config import ModelParams
 from token_tracker import TokenUsageStats
 from tokenizer import Tokenizer
 from weights import TransformerWeights
-from world_model import Action, State, predict_action, predict_state
+from rap.world_model import Action, State, predict_action, predict_state
 
 W_EXP = 1.
 

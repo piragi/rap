@@ -8,14 +8,14 @@ from typing import Dict, List, Optional, Union
 from datasets import load_dataset
 from tqdm import tqdm
 
-from aggregate import aggregate
+from rap.aggregate import aggregate
 from config import ModelParams, load_model_params
 from inference import generate, prepare_tokens
-from mcts import mcts
+from rap.mcts import mcts
 from token_tracker import TokenUsageStats
 from tokenizer import Tokenizer
 from weights import load_weights
-from world_model import State
+from rap.world_model import State
 
 @dataclass
 class BenchmarkResult:
