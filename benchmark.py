@@ -1,146 +1,476 @@
 import json
 import os
-from typing import Dict
+import time
+from collections import Counter
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Union
 
 from datasets import load_dataset
 from tqdm import tqdm
 
-from config import ModelParams
-from main import Tokenizer, load_model_params, load_weights
-from mcts import mcts
-from world_model import State
+from config import ModelParams, load_model_params
+from inference import generate, prepare_tokens
+from rap.aggregate import aggregate
+from rap.mcts import mcts
+from rap.world_model import State
+from token_tracker import TokenUsageStats
+from tokenizer import Tokenizer
+from weights import load_weights
 
-def extract_answer(answer_text: str) -> float:
-    """Extract numerical answer from the text."""
+
+@dataclass
+class BenchmarkResult:
+    """Dataclass to store benchmark results"""
+    accuracy: float
+    correct: int
+    total: int
+    results: List[Dict]
+    last_index: int
+    total_time_seconds: Optional[float] = None
+    aggregate_accuracy: Optional[float] = None
+    aggregate_correct: Optional[int] = None
+    token_stats: Optional[Dict] = None
+
+def extract_answer(answer_text: str) -> Optional[float]:
+    """Extract numerical answer from text."""
     try:
         if "The answer is" in answer_text:
-            answer_str = answer_text.split("The answer is")[-1].strip().strip('.')
-            # Remove any text after the number
-            answer_str = ''.join(c for c in answer_str if c.isdigit() or c == '.')
+            answer_str = answer_text.split("The answer is")[-1].strip().rstrip('.')
+            answer_str = ''.join(c for c in answer_str if c.isdigit() or c == '.' or c == '-')
+            answer_str = answer_str.rstrip('.')
             return float(answer_str)
     except:
-        return None
+        pass
     return None
 
-def run_benchmark(dataset,
-                  tokenizer: Tokenizer,
-                  transformer_weights: dict,
-                  model_params: ModelParams,
-                  n_samples: int = None,
-                  rollouts: int = 10,
-                  depth_limit: int = 5,
-                  action_generation: int = 5) -> Dict:
-    """Run MCTS on GSM8K dataset and compute accuracy."""
+def parse_target(example: Dict) -> Optional[float]:
+    """Parse target answer from example."""
+    try:
+        target_str = example['answer'].split('####')[-1].strip()
+        return float(target_str)
+    except (ValueError, IndexError):
+        return None
 
-    # Use subset of dataset if specified
-    if n_samples:
-        dataset = dataset.select(range(n_samples))
+def write_trace(trace_file: str, idx: int, question: str, target: float, **kwargs):
+    """Write trace information to file."""
+    with open(trace_file, 'a') as f:
+        print("\n" + "=" * 50, file=f)
+        print(f"Index: {idx}", file=f)
+        print(f"Question: {question}", file=f)
+        print(f"Target Answer: {target}", file=f)
+        for key, value in kwargs.items():
+            print(f"{key}: {value}", file=f)
+        print("=" * 50 + "\n", file=f)
 
-    correct = 0
-    total = 0
-    results = []
+class ModelRunner:
+    """Class to handle model interactions"""
+    def __init__(self, tokenizer: Tokenizer, weights: dict, params: ModelParams):
+        self.tokenizer = tokenizer
+        self.weights = weights
+        self.params = params
 
-    prefix = """Given a question, please decompose it into sub-questions. For each sub-question, please answer it in a complete sentence, ending with "The answer is". When the original question is answerable, please start the subquestion with "Now we can answer the question: ".
+    def generate_response(self,
+                          prompts: Union[str, List[str]],
+                          temperature: float = 0.8,
+                          token_stats: Optional[TokenUsageStats] = None,
+                          track_method: Optional[str] = None) -> Union[str, List[str]]:
+        """Generate model responses for one or multiple prompts.
+        
+        Handles batching, token preparation, and generation of responses from the model.
+        Optionally tracks token usage statistics.
+        
+        Args:
+            prompts: Single prompt string or list of prompts
+            temperature: Sampling temperature for generation
+            token_stats: Optional tracker for token usage
+            track_method: Method name for token tracking
+            
+        Returns:
+            Single string response if input was string, list of responses if input was list
+        """
+        if isinstance(prompts, str):
+            prompts = [prompts]
+            is_single = True
+        else:
+            is_single = False
 
-Here are some examples: Question 1: Four years ago, Kody was only half as old as Mohamed. If Mohamed is currently twice as 30 years old, how old is Kody?
-Question 1.1: How old is Mohamed?
-Answer 1.1: He is currently 30 * 2 = 60 years old. The answer is 60.
-Question 1.2: How old was Mohamed four years ago?
-Answer 1.2: Four years ago, he must have been 60 - 4 = 56 years old. The answer is 56.
-Question 1.3: How old was Kody four years ago?
-Answer 1.3: Kody was half as old as Mohamed four years ago. Thus, Kody was 56 / 2 = 28 years old. The answer is 28.
-Question 1.4: Now we can answer the question: How old is Kody?
-Answer 1.4: She is currently 28 + 4 = 32 years old. The answer is 32.
+        # Use prepare_tokens helper for consistent batching
+        batched_tokens = prepare_tokens(prompts, self.tokenizer)
+        input_length = batched_tokens.size(1)
 
-Question 2: On a moonless night, three fireflies danced in the evening breeze. They were joined by four less than a dozen more fireflies before two of the fireflies flew away. How many fireflies remained?
-Question 2.1: How many fireflies joined?
-Answer 2.1: The fireflies were joined by four less than a dozen more fireflies, which are 12 - 4 = 8 fireflies. The answer is 8.
-Question 2.2: Now we can answer the question: How many fireflies remained?
-Answer 2.2: Three fireflies were dancing originally. They were joined by 8 fireflies before two of them flew away. So there were 3 + 8 - 2 = 9 remaining. The answer is 9.
+        output_tokens = generate(self.weights,
+                                 self.params,
+                                 batched_tokens,
+                                 self.tokenizer,
+                                 temperature=temperature,
+                                 max_gen_len=input_length + 200,
+                                 token_stats=token_stats,
+                                 track_method=track_method)
 
-Question 3: Ali has four $10 bills and six $20 bills that he saved after working for Mr. James on his farm. Ali gives her sister half of the total money he has and uses 3/5 of the remaining amount of money to buy dinner. Calculate the amount of money he has after buying the dinner.
-Question 3.1: How much money does Ali have in total?
-Answer 3.1: Ali has four $10 bills and six $20 bills. So he has 4 * 10 + 6 * 20 = 160 dollars. The answer is 160.
-Question 3.2: How much money does Ali give to his sister?
-Answer 3.2: Ali gives half of the total money he has to his sister. So he gives 160 / 2 = 80 dollars to his sister. The answer is 80.
-Question 3.3: How much money does Ali have after giving his sister the money?
-Answer 3.3: After giving his sister the money, Ali has 160 - 80 = 80 dollars left. The answer is 80.
-Question 3.4: How much money does Ali use to buy dinner?
-Answer 3.4: Ali uses 3/5 of the remaining amount of money to buy dinner. So he uses 80 * 3/5 = 48 dollars to buy dinner. The answer is 48.
-Question 3.5: Now we can answer the question: How much money does Ali have after buying the dinner?
-Answer 3.5: After buying the dinner, Ali has 80 - 48 = 32 dollars left. The answer is 32.
+        # Decode complete sequences
+        outputs = []
+        for tokens in output_tokens:
+            text = self.tokenizer.decode(tokens.tolist())
+            outputs.append(text)
 
-Question 4: A car is driving through a tunnel with many turns. After a while, the car must travel through a ring that requires a total of 4 right-hand turns. After the 1st turn, it travels 5 meters. After the 2nd turn, it travels 8 meters. After the 3rd turn, it travels a little further and at the 4th turn, it immediately exits the tunnel. If the car has driven a total of 23 meters around the ring, how far did it have to travel after the 3rd turn?
-Question 4.1: How far did the car travel except for the 3rd turn?
-Answer 4.1: It travels 5 meters after the 1st, 8 meters after the 2nd, and 0 meters after the 4th turn. It’s a total of 5 + 8 + 0 = 13 meters. The answer is 13.
-Question 4.2: Now we can answer the question: How far did the car have to travel after the 3rd turn?
-Answer 4.2: The car has driven a total of 23 meters around the ring. It travels 13 meters except for the 3rd turn. So it has to travel 23 - 13 = 10 meters after the 3rd turn. The answer is 10."""
+        return outputs[0] if is_single else outputs
 
-    for example in tqdm(dataset):
-        question = example['question']
-        target = float(example['answer'].split('####')[-1].strip())
+class BenchmarkRunner:
+    """Base class for running benchmarks"""
+    def __init__(self, dataset, model_runner: ModelRunner, start_idx: int = 0):
+        self.dataset = dataset
+        self.model_runner = model_runner
+        self.start_idx = start_idx
+        self.token_stats = TokenUsageStats()
 
-        # Initialize state with question
-        init_state = State(states=[], prefix=prefix, question="Question 5: " + question)
+    def prepare_dataset(self, n_samples: Optional[int]) -> None:
+        if n_samples and n_samples > 0:
+            end_idx = min(self.start_idx + n_samples, len(self.dataset))
+            self.dataset = self.dataset.select(range(self.start_idx, end_idx))
+        else:
+            self.dataset = self.dataset.select(range(self.start_idx, len(self.dataset)))
 
-        # Run MCTS
-        try:
-            final_state = mcts(init_state, rollouts, depth_limit, action_generation, tokenizer, transformer_weights, model_params)
+class MCTSBenchmark(BenchmarkRunner):
+    """MCTS-specific benchmark implementation"""
+    def run(self,
+            prefix: str,
+            rollouts: int = 10,
+            depth_limit: int = 5,
+            confidence: int = 1,
+            action_generation: int = 5,
+            trace_file: str = "mcts_trace.txt",
+            use_aggregate: bool = False) -> BenchmarkResult:
 
-            # Extract predicted answer
-            if final_state and final_state.states:
-                pred = extract_answer(final_state.states[-1].subanswer)
-                if pred is not None:
-                    # Compare prediction with target
-                    is_correct = abs(pred - target) < 1e-6
-                    correct += int(is_correct)
+        correct_mcts = correct_agg = total = 0
+        results = []
+        self.token_stats = TokenUsageStats()
+        start_time = time.time()
 
-                    results.append({
-                        'question': question,
-                        'target': target,
-                        'predicted': pred,
-                        'correct': is_correct,
-                        'steps': [state.subquestion + "\n" + state.subanswer for state in final_state.states]
-                    })
-        except Exception as e:
-            print(f"Error processing question: {question}")
-            print(f"Error: {str(e)}")
-            continue
+        for idx, example in tqdm(enumerate(self.dataset, start=self.start_idx)):
+            self.token_stats.start_new_run()
+            target = parse_target(example)
+            if target is None:
+                continue
 
-        total += 1
+            write_trace(trace_file, idx, example['question'], target)
 
-        # Print running accuracy
-        print(f"\nRunning accuracy: {correct/total:.2%} ({correct}/{total})")
+            try:
+                result = self._process_example(example, target, prefix, rollouts, depth_limit, action_generation, confidence, use_aggregate)
 
-    accuracy = correct / total if total > 0 else 0
+                if result:
+                    results.append(result)
+                    correct_mcts += int(result.get('mcts_correct', False))
+                    correct_agg += int(result.get('aggregate_correct', False))
+                    total += 1
 
-    return {'accuracy': accuracy, 'correct': correct, 'total': total, 'results': results}
+                    print(f"\nQuestion {idx}")
+                    print(f"Target: {target}")
+                    print(f"MCTS - pred: {result.get('mcts_prediction')}, correct: {result.get('mcts_correct')}")
+                    if use_aggregate:
+                        print(f"Aggregation - pred: {result.get('aggregate_prediction')}, correct: {result.get('aggregate_correct')}")
+                    print(f"Running accuracy - MCTS: {correct_mcts/total:.2%}", end="")
+                    if use_aggregate:
+                        print(f", Aggregation: {correct_agg/total:.2%}")
+                    else:
+                        print()
 
-if __name__ == "__main__":
-    # Load model components
-    home_dir = os.path.expanduser("~")
-    model_path = os.path.join(home_dir, ".llama", "checkpoints", "Llama3.2-3B")
-    model_params = load_model_params(os.path.join(model_path, "params.json"))
-    transformer_weights = load_weights(os.path.join(model_path, "consolidated.00.pth"))
-    tokenizer = Tokenizer(model_path=os.path.join(model_path, "tokenizer.model"))
+            except Exception as e:
+                print(f"\nDetailed error for example {idx}:")
+                print(f"  Question: {example['question'][:100]}...")
+                print(f"  Error type: {type(e).__name__}")
+                print(f"  Error message: {str(e)}")
+                print(f"  Stack trace:")
+                import traceback
+                traceback.print_exc()
+                continue
 
-    # Load GSM8K dataset
-    dataset = load_dataset("openai/gsm8k", "main")
-    test_dataset = dataset['test']
+        return BenchmarkResult(accuracy=correct_mcts / total if total > 0 else 0,
+                               correct=correct_mcts,
+                               total=total,
+                               results=results,
+                               last_index=idx,
+                               total_time_seconds=time.time() - start_time,
+                               aggregate_accuracy=correct_agg / total if use_aggregate and total > 0 else None,
+                               aggregate_correct=correct_agg if use_aggregate else None,
+                               token_stats=self.token_stats.get_stats())
 
-    # Run benchmark
-    results = run_benchmark(
-        dataset=test_dataset,
-        tokenizer=tokenizer,
-        transformer_weights=transformer_weights,
-        model_params=model_params,
-        n_samples=100,  # Set to None to run on full dataset
-        rollouts=5,
-        depth_limit=5,
-        action_generation=5)
+    def _process_example(self, example: Dict, target: float, prefix: str, rollouts: int, depth_limit: int, action_generation: int, confidence: int,
+                         use_aggregate: bool) -> Optional[Dict]:
+        """Process a single example using Monte Carlo Tree Search.
+        
+        Performs MCTS to break down and solve the math problem, optionally
+        aggregating results across multiple search paths.
+        
+        Args:
+            example: The problem example containing question and answer
+            target: The target numerical answer
+            prefix: Prompt prefix for MCTS
+            rollouts: Number of MCTS rollouts
+            depth_limit: Maximum MCTS tree depth
+            action_generation: Number of candidate actions per step
+            confidence: MCTS exploration parameter
+            use_aggregate: Whether to aggregate answers across paths
+            
+        Returns:
+            Dict containing predictions, correctness, and step-by-step reasoning,
+            or None if processing failed
+        """
+        init_state = State(states=[], prefix=prefix, question=example['question'])
+        final_state, root = mcts(init_state,
+                                 rollouts,
+                                 depth_limit,
+                                 action_generation,
+                                 self.model_runner.tokenizer,
+                                 self.model_runner.weights,
+                                 self.model_runner.params,
+                                 confidence,
+                                 token_stats=self.token_stats)
+
+        if not final_state or not final_state.states:
+            self.token_stats.discard_run()  # Discard tokens from failed run
+            return None
+
+        self.token_stats.commit_run()
+
+        result = {
+            'index': example.get('id', -1),
+            'question': example['question'],
+            'target': target,
+        }
+
+        # Process MCTS results
+        mcts_pred = extract_answer(final_state.states[-1].subanswer)
+        if mcts_pred is not None:
+            result.update({
+                'mcts_prediction': mcts_pred,
+                'mcts_correct': abs(mcts_pred - target) < 1e-6,
+                'mcts_steps': [f"{state.subquestion}\n{state.subanswer}" for state in final_state.states]
+            })
+
+        # Process aggregate results if requested
+        if use_aggregate:
+            output, is_correct, reward, conf = aggregate(root, target)
+            if output:
+                result.update({
+                    'aggregate_prediction': float(output),
+                    'aggregate_correct': is_correct,
+                    'aggregate_reward': reward,
+                    'aggregate_confidence': conf
+                })
+
+        return result
+
+class CoTBenchmark(BenchmarkRunner):
+    """Chain of Thought benchmark implementation with batched iterations"""
+    def run(self, max_iterations: int = 10, batch_size: int = 1, trace_file: str = "cot_trace.txt") -> BenchmarkResult:
+        correct = total = 0
+        results = []
+        start_time = time.time()
+
+        # Standard CoT prefix with examples
+        prefix = """Q: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?\nA: Natalia sold 48 clips in April and half as many clips in May, so she sold 48 / 2 = 24 clips in May. Altogether, she sold 48 + 24 = 72 clips. The answer is 72.\n\nQ: Weng earns $12 an hour for babysitting. Yesterday, she just did 50 minutes of babysitting. How much did she earn?\nA: Since Weng earns $12 an hour for babysitting, she earns $12 / 60 = $0.2 per minute. Working 50 minutes, she earned $0.2 x 50 = $10. The answer is 10.\n\nQ: Betty is saving money for a new wallet which costs $100. Betty has only half of the money she needs. Her parents decided to give her $15 for that purpose, and her grandparents twice as much as her parents. How much more money does Betty need to buy the wallet?\nA: In the beginning, Betty has only half of the money she needs, which is 100 / 2 = $50. Her grandparents gave her twice as much as her parents, so they gave her 15 * 2 = $30. Now that she got $15 from her parents and $30 from her grandparents, she will need $100 - $15 - $30 = $55. Since she already has $50, she needs $55 - $50 = $5 more. The answer is 5.\n\nQ: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages and today, she read twice as many pages as yesterday. If she wants to read half of the remaining pages tomorrow, how many pages should she read?\nA: Julie read twice as many pages as yesterday, so she read 12 * 2 = 24 pages today. Since yesterday, Julie read 12 + 24 = 36 pages. So, there are 120 - 36 = 84 pages left to be read. Since she wants to read half of the remaining pages, she should read 84 / 2 = 42 pages. The answer is 42.\n\n"""
+
+        for idx, example in tqdm(enumerate(self.dataset, start=self.start_idx)):
+            self.token_stats.start_new_run()
+            target = parse_target(example)
+            if target is None:
+                continue
+
+            write_trace(trace_file, idx, example['question'], target)
+
+            try:
+                result = self._process_example(example, target, prefix, max_iterations, batch_size, trace_file)
+
+                if result:
+                    results.append(result)
+                    correct += int(result['final_correct'])
+                    total += 1
+
+                    print(f"\nQuestion {idx} - Running accuracy: {correct/total:.2%} ({correct}/{total})")
+                    print(f"Predictions: {result['predictions']}")
+                    print(f"Majority vote: {result['majority_prediction']}, Success: {result['final_correct']}")
+
+                self.token_stats.commit_run()
+
+            except Exception as e:
+                print(f"\nDetailed error for example {idx}:")
+                print(f"  Question: {example['question'][:100]}...")
+                print(f"  Error type: {type(e).__name__}")
+                print(f"  Error message: {str(e)}")
+                print(f"  Stack trace:")
+                import traceback
+                traceback.print_exc()
+                self.token_stats.discard_run()
+                continue
+
+        return BenchmarkResult(accuracy=correct / total if total > 0 else 0,
+                               correct=correct,
+                               total=total,
+                               results=results,
+                               last_index=idx,
+                               total_time_seconds=time.time() - start_time,
+                               token_stats=self.token_stats.get_stats())
+
+    def _process_example(self, example: Dict, target: float, prefix: str, max_iterations: int, batch_size: int, trace_file: str) -> Optional[Dict]:
+        """Process a single example with batched attempts"""
+        prompt = prefix + example['question'] + "\nA: "
+        predictions = []
+        all_attempts = []
+
+        # Process iterations in batches
+        for i in range(0, max_iterations, batch_size):
+            curr_batch_size = min(batch_size, max_iterations - i)
+            try:
+                # Generate batch_size responses at once
+                reasonings = self.model_runner.generate_response([prompt] * curr_batch_size,
+                                                                 temperature=0.8,
+                                                                 token_stats=self.token_stats,
+                                                                 track_method='cot')
+
+                # Process each response in batch
+                for j, reasoning in enumerate(reasonings):
+                    attempt = i + j + 1
+                    reasoning = reasoning.split(prompt)[-1].strip()
+                    pred = extract_answer(reasoning)
+
+                    if pred is not None:
+                        predictions.append(pred)
+                        attempt_result = {
+                            'attempt_number': attempt,
+                            'reasoning': reasoning,
+                            'predicted': pred,
+                        }
+                        all_attempts.append(attempt_result)
+
+                        # Write trace
+                        with open(trace_file, 'a') as f:
+                            print(f"Attempt {attempt}:", file=f)
+                            print(f"Model reasoning:\n{reasoning}\n", file=f)
+                            print(f"Predicted: {pred}\n", file=f)
+
+            except Exception as e:
+                print(f"\nError in model generation, batch starting at attempt {i + 1}: {str(e)}")
+                for j in range(curr_batch_size):
+                    all_attempts.append({'attempt_number': i + j + 1, 'error': str(e)})
+                continue
+
+        # Determine majority vote if we have any valid predictions
+        if predictions:
+            prediction_counts = Counter(predictions)
+            majority_pred = prediction_counts.most_common(1)[0][0]
+            is_correct = abs(majority_pred - target) < 1e-6
+
+            # Write majority vote results to trace
+            with open(trace_file, 'a') as f:
+                print("Majority Vote Results:", file=f)
+                print(f"All predictions: {predictions}", file=f)
+                print(f"Prediction counts: {dict(prediction_counts)}", file=f)
+                print(f"Selected prediction: {majority_pred}", file=f)
+                print(f"Correct: {is_correct}\n", file=f)
+        else:
+            is_correct = False
+            majority_pred = None
+
+        return {
+            'index': example.get('id', -1),
+            'question': example['question'],
+            'target': target,
+            'attempts': all_attempts,
+            'predictions': predictions,
+            'majority_prediction': majority_pred,
+            'final_correct': is_correct
+        }
+
+@dataclass
+class BenchmarkConfig:
+    n_samples: int = 10
+    model_path: str = os.path.expanduser("~/.llama/checkpoints/Llama3.2-3B")
+    max_iteration: int = 1
+    batched_iterations: int = 1
+    rollouts: int = 1
+    depth_limit: int = 6
+    confidence: int = 1
+    action_generation: int = 1
+    use_aggregate: bool = False
+
+def main():
+    """Main entry point for the benchmark script.
+    
+    Handles command line arguments to run either Chain of Thought (CoT) or 
+    Reasoning via Planning (RAP) benchmarks on the GSM8K dataset.
+    
+    Command line args:
+        benchmark_type: Either 'cot' or 'rap'
+        start_index: Optional starting index in dataset (default: 0)
+    
+    The script loads model and dataset, runs the specified benchmark,
+    and saves detailed results to a JSON file. Configuration parameters
+    are handled via the BenchmarkConfig dataclass.
+    """
+    # Parse command line arguments
+    if len(sys.argv) < 2 or sys.argv[1] not in ['cot', 'rap']:
+        print("Usage: python3 benchmark.py [cot|rap] [start_index]")
+        sys.exit(1)
+
+    benchmark_type = sys.argv[1]
+    start_idx = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+
+    # Initialize model
+    config = BenchmarkConfig()
+    model_runner = ModelRunner(tokenizer=Tokenizer(model_path=os.path.join(config.model_path, "tokenizer.model")),
+                               weights=load_weights(os.path.join(config.model_path, "consolidated.00.pth")),
+                               params=load_model_params(os.path.join(config.model_path, "params.json")))
+
+    # Load dataset
+    dataset = load_dataset("openai/gsm8k", "main")['test']
+
+    # Initialize appropriate benchmark
+    if benchmark_type == 'cot':
+        print(f"Running Chain of Thought benchmark...")
+        print(f"Start index: {start_idx}")
+        print(f"Number of samples: {config.n_samples}")
+
+        benchmark = CoTBenchmark(dataset, model_runner, start_idx)
+        benchmark.prepare_dataset(n_samples=config.n_samples)
+
+        results = benchmark.run(max_iterations=config.max_iteration, trace_file=f"cot_trace_{start_idx}.txt", batch_size=config.batched_iterations)
+        output_file = f'gsm8k_cot_iterations{config.max_iteration}_results_start{start_idx}_samples{config.n_samples}.json'
+
+    else:  # rap
+        print(f"Running Reasoning via Planning (RAP) benchmark...")
+        print(f"Start index: {start_idx}")
+        print(f"Number of samples: {config.n_samples}")
+        print(f"Aggregation enabled: {config.use_aggregate}")
+
+        benchmark = MCTSBenchmark(dataset, model_runner, start_idx)
+        benchmark.prepare_dataset(n_samples=config.n_samples)
+
+        # Load RAP-specific parameters
+        prefix = json.load(open('rap/prompts.json'))['repeated']['prompt']
+
+        results = benchmark.run(prefix=prefix,
+                                rollouts=config.rollouts,
+                                depth_limit=config.depth_limit,
+                                confidence=config.confidence,
+                                action_generation=config.action_generation,
+                                trace_file=f"rap_trace_{start_idx}.txt",
+                                use_aggregate=config.use_aggregate)
+        output_file = f'gsm8k_rap_results_start{start_idx}_samples{config.n_samples}.json'
 
     # Save results
-    with open('gsm8k_results.json', 'w') as f:
-        json.dump(results, f, indent=2)
+    with open(output_file, 'w') as f:
+        json.dump(vars(results), f, indent=2)
 
-    print(f"\nFinal accuracy: {results['accuracy']:.2%}")
+    # Print summary
+    print("\nBenchmark Summary:")
+    print(f"Type: {benchmark_type.upper()}")
+    print(f"Samples processed: {results.total}")
+    print(f"Final accuracy: {results.accuracy:.2%}")
+    if benchmark_type == 'rap' and config.use_aggregate:
+        print(f"Aggregation accuracy: {results.aggregate_accuracy:.2%}")
+    print(f"Last processed index: {results.last_index}")
+    print(f"Results saved to: {output_file}")
+
+if __name__ == "__main__":
+    import sys
+    main()
