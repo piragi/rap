@@ -1,12 +1,11 @@
 import math
 import random
-from collections import defaultdict
 from typing import Optional, Tuple
 
 import numpy as np
 
-from benchmark import extract_answer
 from config import ModelParams
+from token_tracker import TokenUsageStats
 from tokenizer import Tokenizer
 from weights import TransformerWeights
 from world_model import Action, State, predict_action, predict_state
@@ -59,8 +58,14 @@ def select_node(node: MCTSNode) -> list[MCTSNode]:
             # For visited nodes, use standard UCT with max_reward
             else (child.max_reward + W_EXP * np.sqrt(np.log(node.visits) / child.visits)))
 
-def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
-               model_params: ModelParams, confidence: int) -> list[MCTSNode]:
+def simulation(node: MCTSNode,
+               depth_limit: int,
+               action_generation: int,
+               tokenizer: Tokenizer,
+               transformer_weights: TransformerWeights,
+               model_params: ModelParams,
+               confidence: int,
+               token_stats: Optional[TokenUsageStats] = None) -> list[MCTSNode]:
     path = []
     current_node = node
 
@@ -68,8 +73,13 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
         if current_node not in path:
             path.append(current_node)
         if current_node.state is None:
-            current_node.state = predict_state(current_node.parent.state, current_node.action, tokenizer, transformer_weights, model_params,
-                                               confidence)
+            current_node.state = predict_state(current_node.parent.state,
+                                               current_node.action,
+                                               tokenizer,
+                                               transformer_weights,
+                                               model_params,
+                                               confidence,
+                                               token_stats=token_stats)
             current_node.reward = calculate_reward(current_node.fast_reward, current_node.state.states[-1].confidence)
         if current_node.is_terminal():
             break
@@ -81,7 +91,12 @@ def simulation(node: MCTSNode, depth_limit: int, action_generation: int, tokeniz
                 current_node.children.append(MCTSNode(state=None, action=original_question, parent=current_node, reward=0., fast_reward=fast_reward))
             else:
                 # Generate all actions at once
-                actions_with_rewards = predict_action(current_node.state, tokenizer, transformer_weights, model_params, action_generation)
+                actions_with_rewards = predict_action(current_node.state,
+                                                      tokenizer,
+                                                      transformer_weights,
+                                                      model_params,
+                                                      action_generation,
+                                                      token_stats=token_stats)
                 # Create children nodes
                 for action, fast_reward in actions_with_rewards:
                     current_node.children.append(MCTSNode(state=None, action=action, parent=current_node, reward=0., fast_reward=fast_reward))
@@ -121,13 +136,27 @@ def get_highest_reward_path(root: MCTSNode) -> tuple[float, list[MCTSNode]]:
 
     return dfs([root])
 
-def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: int, tokenizer: Tokenizer, transformer_weights: TransformerWeights,
-         model_params: ModelParams, confidence: int) -> tuple[State, MCTSNode]:
+def mcts(init_state: State,
+         rollouts: int,
+         depth_limit: int,
+         action_generation: int,
+         tokenizer: Tokenizer,
+         transformer_weights: TransformerWeights,
+         model_params: ModelParams,
+         confidence: int,
+         token_stats: Optional[TokenUsageStats] = None) -> tuple[State, MCTSNode]:
     root = MCTSNode(init_state, init_state.question, None, 0., 0.)
     for _ in range(rollouts):
         path = select_node(root)
         last_node = path.pop()
-        simulation_path = simulation(last_node, depth_limit - len(path), action_generation, tokenizer, transformer_weights, model_params, confidence)
+        simulation_path = simulation(last_node,
+                                     depth_limit - len(path),
+                                     action_generation,
+                                     tokenizer,
+                                     transformer_weights,
+                                     model_params,
+                                     confidence,
+                                     token_stats=token_stats)
         path.extend(simulation_path)
         backpropagation(path)
 
@@ -138,81 +167,6 @@ def mcts(init_state: State, rollouts: int, depth_limit: int, action_generation: 
         return None
     append_best_path(best_path)
     return best_path[-1].state, root
-
-def aggregate(root: MCTSNode, answer: float) -> Tuple[str, bool, float, float]:
-    """
-    Aggregate results from a completed MCTS tree.
-    
-    Args:
-        root: The root node of the completed MCTS tree
-        answer: The ground truth answer to validate against
-    
-    Returns:
-        output: The predicted answer string
-        correct: Whether prediction matches ground truth 
-        reward: The aggregated reward
-        confidence: Confidence score (reward/total_reward)
-    """
-    answer_dict = defaultdict(float)
-
-    def visit(cur: MCTSNode) -> list[Tuple[Tuple[str, bool], int]]:
-        # Skip unvisited or negative reward nodes
-        if not cur.visits or cur.reward < 0:
-            return []
-
-        # For terminal nodes, check answer and add weighted reward
-        if cur.is_terminal():
-            if not cur.state or not cur.state.states:
-                return []
-            # Get answer from final state
-            pred = extract_answer(cur.state.states[-1].subanswer)
-            if pred is None:
-                return []
-
-            correct = abs(float(pred) - answer) < 1e-6
-
-            # Calculate depth
-            depth = 0
-            node = cur
-            while node.parent:
-                depth += 1
-                node = node.parent
-
-            # Store tuple of (prediction string, correctness)
-            key = (str(pred), correct)
-            answer_dict[key] += cur.reward / depth
-            return [(key, depth)]
-
-        # Process children and their depths
-        depth_dict = defaultdict(list)
-        results = []
-        for child in cur.children:
-            child_results = visit(child)
-            results.extend(child_results)
-            for key, depth in child_results:
-                depth_dict[key].append(depth)
-
-        # Add weighted rewards from this node
-        for key, depths in depth_dict.items():
-            answer_dict[key] += cur.reward * len(depths) / sum(depths)
-
-        return results
-
-    # Traverse tree
-    visit(root)
-
-    if not answer_dict:
-        return '', False, -10, 0
-
-    # Sort by aggregated rewards
-    answer_reward_list = sorted(answer_dict.items(), key=lambda x: x[1], reverse=True)
-    (pred_str, is_correct), reward = answer_reward_list[0]
-
-    # Calculate confidence as portion of total reward
-    reward_sum = sum(x[1] for x in answer_reward_list)
-    confidence = reward / reward_sum if reward_sum > 0 else 0
-
-    return pred_str, is_correct, reward, confidence
 
 def print_mcts(root: MCTSNode, prefix: str = "", is_last: bool = True, filename: str = "mcts_trace.txt"):
     """
@@ -257,3 +211,14 @@ def append_best_path(best_path: list[MCTSNode], filename: str = "mcts_trace.txt"
                 print(f"Question: {last_state.subquestion}, Reward: {node.reward:.2f}", file=f)
                 print(f"Answer: {last_state.subanswer}", file=f)
                 print("-" * 20, file=f)
+
+def extract_answer(answer_text: str) -> Optional[float]:
+    """Extract numerical answer from text."""
+    try:
+        if "The answer is" in answer_text:
+            answer_str = answer_text.split("The answer is")[-1].strip().strip('.')
+            answer_str = ''.join(c for c in answer_str if c.isdigit() or c == '.' or c == '-')
+            return float(answer_str)
+    except:
+        pass
+    return None

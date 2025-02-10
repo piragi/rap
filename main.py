@@ -6,6 +6,7 @@ import torch
 
 from config import ModelParams
 from model import KVCache, transformer
+from token_tracker import TokenUsageStats
 from tokenizer import Tokenizer
 from weights import TransformerWeights
 
@@ -158,7 +159,8 @@ def get_confidence_state(action: str,
                          tokenizer: Tokenizer,
                          transformer_weights: TransformerWeights,
                          model_params: ModelParams,
-                         batch_size: int = 5) -> Tuple[torch.Tensor, float]:
+                         batch_size: int = 5,
+                         token_stats: Optional[TokenUsageStats] = None) -> Tuple[torch.Tensor, float]:
     """
     Get confidence state by adaptively sampling until we find a clear winner.
     """
@@ -171,7 +173,13 @@ def get_confidence_state(action: str,
         prompts = [action] * curr_batch_size
         batched_tokens = prepare_tokens(prompts, tokenizer)
         input_length = batched_tokens.size(1)
-        gen_tokens = generate(transformer_weights, model_params, batched_tokens, tokenizer, max_gen_len=input_length + 200)
+        gen_tokens = generate(transformer_weights,
+                              model_params,
+                              batched_tokens,
+                              tokenizer,
+                              max_gen_len=input_length + 200,
+                              track_method="generate_state",
+                              token_stats=token_stats)
 
         for tokens in gen_tokens:
             text = tokenizer.decode(tokens.tolist())
@@ -207,13 +215,20 @@ def get_confidence_state(action: str,
     confidence = count / len(answers)
     return tokens_map[most_common_answer].unsqueeze(0), confidence
 
-def get_self_eval(reasoning: Union[str, List[str]], tokenizer: Tokenizer, transformer_weights: TransformerWeights,
-                  model_params: ModelParams) -> List[float]:
+def get_self_eval(reasoning: Union[str, List[str]],
+                  tokenizer: Tokenizer,
+                  transformer_weights: TransformerWeights,
+                  model_params: ModelParams,
+                  token_stats: Optional[TokenUsageStats] = None) -> List[float]:
     yes_probs = []
     useful = json.load(open('prompts.json'))['useful_noprompt']['prompt']
     for r in reasoning:
         prompt = f"{useful}\n{r}\nIs the new question useful? "
         tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special="all")], dtype=torch.long, device=device)
+
+        # Track +1 for the single token generation (Yes/No)
+        if token_stats:
+            token_stats.add_generate_action(1)  # One token for Yes/No prediction
 
         seqlen = tokens.shape[1]
         attn_mask = build_attn_mask(seqlen, 0)
@@ -273,6 +288,8 @@ def generate(
     temperature: float = 0.8,
     top_p: float = 0.90,
     max_gen_len: int = 200,
+    track_method: Optional[str] = None,
+    token_stats: Optional[TokenUsageStats] = None,
 ) -> torch.Tensor:
     """
     Generate tokens from an input tensor.
@@ -339,4 +356,17 @@ def generate(
                     if torch.isin(next_token, stop).any() or '\n' in token_str:
                         finished[i] = True
             generated.append(next_token)
-    return torch.cat(generated, dim=1)
+
+    generated = torch.cat(generated, dim=1)
+
+    if track_method and token_stats:
+        # Count non-padding tokens in output
+        for seq in generated:
+            token_count = int((seq != tokenizer.pad_id).sum().item())
+            if track_method == 'generate_action':
+                token_stats.add_generate_action(token_count)
+            elif track_method == 'generate_state':
+                token_stats.add_generate_state(token_count)
+            elif track_method == 'cot':
+                token_stats.add_cot(token_count)
+    return generated
