@@ -38,7 +38,6 @@ def extract_answer(answer_text: str) -> Optional[float]:
             answer_str = answer_text.split("The answer is")[-1].strip().rstrip('.')
             answer_str = ''.join(c for c in answer_str if c.isdigit() or c == '.' or c == '-')
             answer_str = answer_str.rstrip('.')
-            print(answer_str)
             return float(answer_str)
     except:
         pass
